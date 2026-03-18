@@ -982,6 +982,11 @@ describe("Enhanced TaskCreate", () => {
     expect(result.content[0].text).toContain("Error");
     expect(result.content[0].text).toContain("subject");
   });
+
+  it("handles empty tasks array gracefully", async () => {
+    const result = await mock.executeTool("TaskCreate", { tasks: [] });
+    expect(result.content[0].text).toContain("Created 0 task(s)");
+  });
 });
 
 describe("Orphan reminder on resume", () => {

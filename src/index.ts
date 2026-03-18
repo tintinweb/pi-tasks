@@ -638,7 +638,10 @@ To run a task as a subagent: (1) create the task with \`agentType\` set (e.g., "
       if (shouldClear) store.clearCompleted();
 
       // Batch mode: tasks array provided
-      if (params.tasks && params.tasks.length > 0) {
+      if (params.tasks) {
+        if (params.tasks.length === 0) {
+          return Promise.resolve(textResult("Created 0 task(s)."));
+        }
         const createdTasks: Array<{ id: string; subject: string }> = [];
         const allWarnings: string[] = [];
 

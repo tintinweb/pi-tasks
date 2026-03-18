@@ -330,7 +330,7 @@ src/
 ```bash
 npm install
 npm run typecheck   # TypeScript validation
-npm test            # Run unit tests (165 tests)
+npm test            # Run unit tests (181+ tests)
 ```
 
 ## License
