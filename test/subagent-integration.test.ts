@@ -872,7 +872,7 @@ describe("Nudge suppression", () => {
   });
 });
 
-describe("TaskCreateMany", () => {
+describe("TaskCreate batch mode", () => {
   let mock: ReturnType<typeof mockPi>;
 
   beforeEach(() => {
@@ -880,12 +880,8 @@ describe("TaskCreateMany", () => {
     initExtension(mock.pi as any);
   });
 
-  it("is registered as a tool", () => {
-    expect(mock.tools.has("TaskCreateMany")).toBe(true);
-  });
-
-  it("creates multiple tasks in one call", async () => {
-    const result = await mock.executeTool("TaskCreateMany", {
+  it("creates multiple tasks via tasks array", async () => {
+    const result = await mock.executeTool("TaskCreate", {
       tasks: [
         { subject: "Task A", description: "First" },
         { subject: "Task B", description: "Second" },
@@ -899,8 +895,8 @@ describe("TaskCreateMany", () => {
     expect(result.content[0].text).toContain("Task C");
   });
 
-  it("creates tasks with dependencies in batch", async () => {
-    await mock.executeTool("TaskCreateMany", {
+  it("wires dependencies in batch", async () => {
+    await mock.executeTool("TaskCreate", {
       tasks: [
         { subject: "First", description: "desc" },
         { subject: "Second", description: "desc", blockedBy: ["1"] },
@@ -979,6 +975,12 @@ describe("Enhanced TaskCreate", () => {
     const listResult = await mock.executeTool("TaskList", {});
     expect(listResult.content[0].text).not.toContain("Old task");
     expect(listResult.content[0].text).toContain("New task");
+  });
+
+  it("returns error when neither subject nor tasks provided", async () => {
+    const result = await mock.executeTool("TaskCreate", {});
+    expect(result.content[0].text).toContain("Error");
+    expect(result.content[0].text).toContain("subject");
   });
 });
 
@@ -1195,7 +1197,7 @@ describe("clearCompleted + blockedBy interaction", () => {
   it("does not permanently block tasks referencing cleared task IDs", async () => {
     // Reproduce exact session failure:
     // 1. Create task #1, complete it
-    // 2. TaskCreateMany with clearCompleted=true creates #2 with blockedBy=['1']
+    // 2. TaskCreate (batch) with clearCompleted=true creates #2 with blockedBy=['1']
     // 3. #1 is cleared (deleted), but #2 still references it
     // 4. TaskExecute should treat the missing blocker as resolved, not blocked
     await mock.executeTool("TaskCreate", {
@@ -1204,7 +1206,7 @@ describe("clearCompleted + blockedBy interaction", () => {
     });
     await mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" });
 
-    await mock.executeTool("TaskCreateMany", {
+    await mock.executeTool("TaskCreate", {
       clearCompleted: true,
       tasks: [
         { subject: "Independent", description: "desc", agentType: "general-purpose" },
@@ -1228,8 +1230,8 @@ describe("clearCompleted + blockedBy interaction", () => {
     expect(result.content[0].text).toContain("#999");
   });
 
-  it("surfaces warnings in TaskCreateMany for dangling refs", async () => {
-    const result = await mock.executeTool("TaskCreateMany", {
+  it("surfaces warnings in batch mode for dangling refs", async () => {
+    const result = await mock.executeTool("TaskCreate", {
       tasks: [
         { subject: "Good task", description: "desc" },
         { subject: "Bad ref", description: "desc", blockedBy: ["888"] },

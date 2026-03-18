@@ -2,7 +2,7 @@
  * @tintinweb/pi-tasks — A pi extension providing Claude Code-style task tracking and coordination.
  *
  * Tools:
- *   TaskCreate   — Create a structured task
+ *   TaskCreate   — Create one or more structured tasks (single or batch mode)
  *   TaskList     — List all tasks with status
  *   TaskGet      — Get full task details
  *   TaskUpdate   — Update task fields, status, dependencies
@@ -48,7 +48,7 @@ function formatTaskDetail(task: { id: string; subject: string; description: stri
 }
 
 /** Task tool names — used to detect task tool usage for reminder suppression. */
-const TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskCreateMany", "TaskList", "TaskGet", "TaskUpdate", "TaskOutput", "TaskStop", "TaskExecute"]);
+const TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskOutput", "TaskStop", "TaskExecute"]);
 
 /** How many turns without task tool usage before injecting a reminder. */
 const REMINDER_INTERVAL = 4;
@@ -501,7 +501,7 @@ export default function (pi: ExtensionAPI) {
     widget.update();
   });
 
-  /** Shared logic for creating a single task (used by TaskCreate and TaskCreateMany).
+  /** Shared logic for creating a single task (used by TaskCreate in both single and batch modes).
    *  Returns the created task and any dependency warnings (dangling refs, cycles). */
   function createSingleTask(params: {
     subject: string; description: string; activeForm?: string; agentType?: string;
@@ -535,6 +535,20 @@ export default function (pi: ExtensionAPI) {
   // ──────────────────────────────────────────────────
   // Tool 1: TaskCreate
   // ──────────────────────────────────────────────────
+
+  const taskItemSchema = Type.Object({
+    subject: Type.String({ description: "A brief title for the task" }),
+    description: Type.String({ description: "A detailed description of what needs to be done" }),
+    activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
+    agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
+    blockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task (sets up dependencies at creation)" })),
+    blocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks (sets up dependencies at creation)" })),
+    status: Type.Optional(Type.Unsafe<"pending" | "in_progress">({
+      type: "string", enum: ["pending", "in_progress"],
+      description: "Initial status — use 'in_progress' to start working immediately",
+    })),
+  });
 
   pi.registerTool({
     name: "TaskCreate",
@@ -573,6 +587,12 @@ NOTE that you should not use this tool if there is only one trivial task to do. 
 
 All tasks are created with status \`pending\`.
 
+## Batch Mode
+
+To create multiple tasks in one call, pass a \`tasks\` array instead of individual fields.
+Tasks are created in array order with sequential IDs. Use the expected IDs in blockedBy/blocks
+to wire dependencies within the same batch.
+
 ## Tips
 
 - Create tasks with clear, specific subjects that describe the outcome
@@ -596,8 +616,9 @@ To run a task as a subagent: (1) create the task with \`agentType\` set (e.g., "
       "Use TaskList to check for available work after completing a task.",
     ],
     parameters: Type.Object({
-      subject: Type.String({ description: "A brief title for the task" }),
-      description: Type.String({ description: "A detailed description of what needs to be done" }),
+      // Single-task fields (used when tasks array is not provided)
+      subject: Type.Optional(Type.String({ description: "A brief title for the task" })),
+      description: Type.Optional(Type.String({ description: "A detailed description of what needs to be done" })),
       activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
       agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
       metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
@@ -608,75 +629,42 @@ To run a task as a subagent: (1) create the task with \`agentType\` set (e.g., "
         description: "Initial status — use 'in_progress' to start working immediately",
       })),
       clearCompleted: Type.Optional(Type.Boolean({ description: "Clear completed/skipped tasks before creating this one" })),
+      // Batch mode: array of tasks (overrides single-task fields)
+      tasks: Type.Optional(Type.Array(taskItemSchema, { description: "Array of tasks to create in batch (overrides single-task fields)" })),
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const shouldClear = params.clearCompleted ?? (cfg.autoClearCompleted ?? true);
       if (shouldClear) store.clearCompleted();
 
-      const { task, warnings } = createSingleTask(params);
+      // Batch mode: tasks array provided
+      if (params.tasks && params.tasks.length > 0) {
+        const createdTasks: Array<{ id: string; subject: string }> = [];
+        const allWarnings: string[] = [];
+
+        for (const t of params.tasks) {
+          const { task, warnings } = createSingleTask(t);
+          createdTasks.push({ id: task.id, subject: task.subject });
+          allWarnings.push(...warnings);
+        }
+
+        widget.update();
+
+        const lines = createdTasks.map(t => `#${t.id}: ${t.subject}`);
+        let text = `Created ${createdTasks.length} task(s):\n${lines.join("\n")}`;
+        if (allWarnings.length > 0) text += `\nWarnings: ${allWarnings.join("; ")}`;
+        return Promise.resolve(textResult(text));
+      }
+
+      // Single mode: subject + description required
+      if (!params.subject || !params.description) {
+        return Promise.resolve(textResult("Error: subject and description are required (or provide a tasks array for batch mode)"));
+      }
+
+      const { task, warnings } = createSingleTask(params as Parameters<typeof createSingleTask>[0]);
       widget.update();
       let text = formatTaskDetail(store.get(task.id) ?? task);
       if (warnings.length > 0) text += `\nWarnings: ${warnings.join("; ")}`;
-      return Promise.resolve(textResult(text));
-    },
-  });
-
-  // ──────────────────────────────────────────────────
-  // Tool 1b: TaskCreateMany
-  // ──────────────────────────────────────────────────
-
-  pi.registerTool({
-    name: "TaskCreateMany",
-    label: "TaskCreateMany",
-    description: `Create multiple tasks in a single call — reduces round-trips when setting up a task list.
-
-## When to Use This Tool
-
-- When you need to create 2 or more tasks at once (e.g., breaking down a plan into steps)
-- When tasks have dependencies on each other — blockedBy/blocks references use IDs of tasks created in this same batch
-- Replaces the pattern of calling TaskCreate + TaskUpdate multiple times
-
-## Batch Dependency References
-
-Tasks are created in array order with sequential IDs. Use the expected IDs in blockedBy/blocks.
-For example, if the next task ID is 5 and you create 3 tasks, they get IDs 5, 6, 7.
-Use TaskList first to determine the next available ID if needed.`,
-    parameters: Type.Object({
-      tasks: Type.Array(Type.Object({
-        subject: Type.String({ description: "A brief title for the task" }),
-        description: Type.String({ description: "A detailed description of what needs to be done" }),
-        activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress" })),
-        agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution" })),
-        metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata" })),
-        blockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task" })),
-        blocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks" })),
-        status: Type.Optional(Type.Unsafe<"pending" | "in_progress">({
-          type: "string", enum: ["pending", "in_progress"],
-          description: "Initial status",
-        })),
-      }), { description: "Array of tasks to create" }),
-      clearCompleted: Type.Optional(Type.Boolean({ description: "Clear completed/skipped tasks before creating" })),
-    }),
-
-    execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const shouldClear = params.clearCompleted ?? (cfg.autoClearCompleted ?? true);
-      if (shouldClear) store.clearCompleted();
-
-      const createdTasks: Array<{ id: string; subject: string }> = [];
-      const allWarnings: string[] = [];
-
-      for (const t of params.tasks) {
-        const { task, warnings } = createSingleTask(t);
-        createdTasks.push({ id: task.id, subject: task.subject });
-        allWarnings.push(...warnings);
-      }
-
-      widget.update();
-
-      const lines = createdTasks.map(t => `#${t.id}: ${t.subject}`);
-      let text = `Created ${createdTasks.length} task(s):\n${lines.join("\n")}`;
-      if (allWarnings.length > 0) text += `\nWarnings: ${allWarnings.join("; ")}`;
       return Promise.resolve(textResult(text));
     },
   });

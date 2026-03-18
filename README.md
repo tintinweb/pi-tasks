@@ -12,7 +12,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 
 ## Features
 
-- **8 LLM-callable tools** — `TaskCreate`, `TaskCreateMany`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
+- **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
 - **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time and token counts
 - **System-reminder injection** — periodic `<system-reminder>` nudges appended to tool results when task tools haven't been used recently (matches Claude Code's behavior exactly)
 - **Prompt guidelines** — workflow contract encoded in tool descriptions, nudging the LLM at the point of tool use
@@ -57,32 +57,34 @@ The extension renders a persistent widget above the editor:
 
 ### `TaskCreate`
 
-Create a structured task. Used proactively for complex multi-step work.
+Create one or more structured tasks. Supports single-task and batch modes.
+
+**Single mode** — pass `subject` and `description` directly:
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `subject` | string | yes | Brief imperative title |
-| `description` | string | yes | Detailed context and acceptance criteria |
+| `subject` | string | yes* | Brief imperative title |
+| `description` | string | yes* | Detailed context and acceptance criteria |
 | `activeForm` | string | no | Present continuous form for spinner (e.g., "Running tests") |
 | `agentType` | string | no | Agent type for subagent execution (e.g., `"general-purpose"`, `"Explore"`) |
 | `metadata` | object | no | Arbitrary key-value pairs |
 | `blockedBy` | string[] | no | Task IDs that block this task |
 | `blocks` | string[] | no | Task IDs that this task blocks |
 | `status` | `pending` / `in_progress` | no | Initial status (default: `pending`) |
-| `clearCompleted` | boolean | no | Clear completed/skipped tasks before creating |
+| `clearCompleted` | boolean | no | Clear completed/skipped tasks before creating (default: `true`) |
+
+*\*Required unless `tasks` array is provided.*
 
 ```
 → Task #1 created successfully: Fix authentication bug
 ```
 
-### `TaskCreateMany`
-
-Create multiple tasks in a single call — reduces round-trips when setting up a task list.
+**Batch mode** — pass a `tasks` array:
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `tasks` | array | yes | Array of task objects (same fields as TaskCreate except `clearCompleted`) |
-| `clearCompleted` | boolean | no | Clear completed/skipped tasks before creating |
+| `tasks` | array | yes | Array of task objects (same fields as single mode) |
+| `clearCompleted` | boolean | no | Clear completed/skipped tasks before creating (default: `true`) |
 
 Tasks are created in array order with sequential IDs. Use the expected IDs in `blockedBy`/`blocks` to wire dependencies within the same batch.
 
