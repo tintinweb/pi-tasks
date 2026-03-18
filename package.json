@@ -13,7 +13,7 @@
     "url": "https://github.com/tintinweb/pi-tasks/issues"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "keywords": [
     "pi-package",
@@ -45,5 +45,6 @@
     ],
     "video": "https://github.com/tintinweb/pi-tasks/raw/master/media/demo.mp4",
     "image": "https://github.com/tintinweb/pi-tasks/raw/master/media/screenshot.png"
-  }
+  },
+  "packageManager": "pnpm@11.0.0-alpha.16+sha512.05735fb2d8ce002cebe14f31afe59246cf1cc8f0c11ff296ab2844e0d8c3bafe7186d935b08c33d13af4ca3e267dfd5e7250eb41cb2331b14d1413b047269c7b"
 }

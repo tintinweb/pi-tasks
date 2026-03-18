@@ -11,12 +11,15 @@ import { homedir } from "node:os";
 import type { Task, TaskStatus, TaskStoreData } from "./types.js";
 
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
-const LOCK_RETRY_MS = 50;
-const LOCK_MAX_RETRIES = 100; // 5s max
+const LOCK_RETRY_MS = 10;
+const LOCK_MAX_RETRIES = 50; // 500ms max (10ms × 50)
 
-/** Simple file-based locking. */
+/** Simple file-based locking with bounded retry.
+ *  Uses a short spin-sleep to avoid Atomics.wait (which blocks the event
+ *  loop on the main thread). Contention is rare in practice — this path
+ *  only fires for project-scoped or shared stores, not the default
+ *  session-scoped mode. */
 function acquireLock(lockPath: string): void {
-  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
     try {
       // O_EXCL: fail if file exists
@@ -31,24 +34,35 @@ function acquireLock(lockPath: string): void {
             unlinkSync(lockPath);
             continue;
           }
-        } catch { /* ignore read errors */ }
-        // Wait and retry — block thread without burning CPU
-        Atomics.wait(waitBuffer, 0, 0, LOCK_RETRY_MS);
+        } catch {
+          // Lock file unreadable (race) — retry
+        }
+        // Brief spin-sleep: burn a few ms checking Date.now() rather than
+        // blocking the entire thread with Atomics.wait.
+        const deadline = Date.now() + LOCK_RETRY_MS;
+        while (Date.now() < deadline) { /* spin */ }
         continue;
       }
       throw e;
     }
   }
-  throw new Error(`Failed to acquire lock: ${lockPath}`);
+  throw new Error(`Failed to acquire lock after ${LOCK_MAX_RETRIES} retries: ${lockPath}`);
 }
 
 function releaseLock(lockPath: string): void {
-  try { unlinkSync(lockPath); } catch { /* ignore */ }
+  try { unlinkSync(lockPath); } catch (e: any) {
+    // ENOENT: lock already removed (race) — expected; other errors are surprising
+    if (e.code !== "ENOENT") console.warn("[pi-tasks] lock release failed:", e.code);
+  }
 }
 
 function isProcessRunning(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
+
+/** How long (ms) to trust a cached disk read before re-reading.
+ *  Coalesces rapid get()/list() calls within the same event loop turn. */
+const READ_CACHE_TTL_MS = 50;
 
 export class TaskStore {
   private filePath: string | undefined;
@@ -57,6 +71,8 @@ export class TaskStore {
   // In-memory state (always kept in sync)
   private nextId = 1;
   private tasks = new Map<string, Task>();
+  /** Timestamp of last successful load() — used to skip redundant reads. */
+  private lastLoadAt = 0;
 
   constructor(listIdOrPath?: string) {
     if (!listIdOrPath) return;
@@ -69,15 +85,21 @@ export class TaskStore {
   }
 
   /** Read store from disk (file-backed mode only). */
-  private load(): void {
+  private load(force = false): void {
     if (!this.filePath) return;
+    // Skip redundant reads within the cache TTL unless forced (e.g., inside withLock)
+    if (!force && Date.now() - this.lastLoadAt < READ_CACHE_TTL_MS) return;
     try {
-      const data: TaskStoreData = JSON.parse(readFileSync(this.filePath, "utf-8"));
+      const raw = JSON.parse(readFileSync(this.filePath, "utf-8"));
+      // Shape validation — reject data that doesn't match TaskStoreData
+      if (typeof raw?.nextId !== "number" || !Array.isArray(raw?.tasks)) return;
+      const data = raw as TaskStoreData;
       this.nextId = data.nextId;
       this.tasks.clear();
       for (const t of data.tasks) {
         this.tasks.set(t.id, t);
       }
+      this.lastLoadAt = Date.now();
     } catch (e: any) {
       // ENOENT: file deleted between calls (race with deleteFileIfEmpty) — start fresh
       if (e.code === "ENOENT") return;
@@ -99,9 +121,10 @@ export class TaskStore {
     try {
       writeFileSync(tmpPath, JSON.stringify(data, null, 2));
       renameSync(tmpPath, this.filePath);
+      this.lastLoadAt = Date.now(); // Data is fresh after write
     } catch (e) {
       // Clean up orphaned temp file on write failure
-      try { unlinkSync(tmpPath); } catch { /* ignore */ }
+      try { unlinkSync(tmpPath); } catch { /* ENOENT race — benign */ }
       throw e;
     }
   }
@@ -129,7 +152,7 @@ export class TaskStore {
     if (!this.lockPath) return fn();
     acquireLock(this.lockPath);
     try {
-      this.load(); // Re-read latest state
+      this.load(true); // Force re-read under lock — must see latest state
       const result = fn();
       this.save();
       return result;
@@ -307,7 +330,9 @@ export class TaskStore {
   /** Delete the backing file (if file-backed and empty). */
   deleteFileIfEmpty(): boolean {
     if (!this.filePath || this.tasks.size > 0) return false;
-    try { unlinkSync(this.filePath); } catch { /* ignore */ }
+    try { unlinkSync(this.filePath); } catch (e: any) {
+      if (e.code !== "ENOENT") console.warn("[pi-tasks] store file cleanup failed:", e.code);
+    }
     return true;
   }
 

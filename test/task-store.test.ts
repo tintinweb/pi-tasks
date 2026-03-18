@@ -468,6 +468,19 @@ describe("TaskStore (error handling)", () => {
     expect(store.list()).toEqual([]);
   });
 
+  it("handles shape-invalid JSON gracefully (starts fresh)", () => {
+    // Valid JSON but wrong shape — nextId is a string, tasks missing
+    writeFileSync(errFilePath, JSON.stringify({ nextId: "abc", foo: true }));
+    const store = new TaskStore(errFilePath);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("handles JSON with missing tasks array (starts fresh)", () => {
+    writeFileSync(errFilePath, JSON.stringify({ nextId: 5 }));
+    const store = new TaskStore(errFilePath);
+    expect(store.list()).toEqual([]);
+  });
+
   it("cleans up temp file on write failure", () => {
     const store = new TaskStore(errFilePath);
     store.create("Test", "Desc");

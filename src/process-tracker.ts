@@ -42,7 +42,8 @@ export class ProcessTracker {
     /** Append chunk to output buffer, evicting oldest entries if over budget. */
     const appendOutput = (chunk: Buffer) => {
       const str = chunk.toString();
-      bp.totalBytes += chunk.length;
+      const byteLen = Buffer.byteLength(str);
+      bp.totalBytes += byteLen;
       bp.output.push(str);
       // Invalidate cached join
       this.outputCache.delete(taskId);
@@ -145,7 +146,7 @@ export class ProcessTracker {
     // Wait up to 5s for graceful exit
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        try { bp.proc.kill("SIGKILL"); } catch { /* already dead */ }
+        try { bp.proc.kill("SIGKILL"); } catch { /* ESRCH: process already exited */ }
         resolve();
       }, 5000);
 
@@ -173,5 +174,16 @@ export class ProcessTracker {
     this.processes.delete(taskId);
     this.outputCache.delete(taskId);
     return true;
+  }
+
+  /** Kill all running processes and clear all tracking state. */
+  dispose(): void {
+    for (const [, bp] of this.processes) {
+      if (bp.status === "running") {
+        try { bp.proc.kill("SIGTERM"); } catch { /* ESRCH: process already exited */ }
+      }
+    }
+    this.processes.clear();
+    this.outputCache.clear();
   }
 }

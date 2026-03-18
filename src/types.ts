@@ -29,6 +29,15 @@ export interface TaskStoreData {
   tasks: Task[];
 }
 
+/** Per-task budget/timeout tracking for TaskExecute. */
+export interface TaskBudget {
+  startedAt: number;
+  tokenBudget?: number;
+  tokensUsed: number;
+  timeoutMs?: number;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
 /** Background process associated with a task. */
 export interface BackgroundProcess {
   taskId: string;

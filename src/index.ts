@@ -20,7 +20,7 @@ import { TaskStore } from "./task-store.js";
 import { ProcessTracker } from "./process-tracker.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
 import { loadTasksConfig } from "./tasks-config.js";
-import { isTerminalStatus } from "./types.js";
+import { isTerminalStatus, type TaskBudget } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
@@ -66,7 +66,7 @@ export default function (pi: ExtensionAPI) {
     if (hasGitInstall && isNpmGlobal) {
       console.warn("[pi-tasks] Warning: detected both git (~/.pi/agent/git/pi-tasks) and npm global installations. This may cause conflicts — consider removing one.");
     }
-  } catch { /* ignore detection errors */ }
+  } catch { /* Non-fatal: detection is best-effort advisory */ }
 
   // Initialize store and config
   const cfg = loadTasksConfig();
@@ -102,13 +102,6 @@ export default function (pi: ExtensionAPI) {
   const agentTaskMap = new Map<string, string>();
 
   // ── Task-level budget/timeout tracking ──
-  interface TaskBudget {
-    startedAt: number;
-    tokenBudget?: number;
-    tokensUsed: number;
-    timeoutMs?: number;
-    timer?: ReturnType<typeof setTimeout>;
-  }
   const taskBudgets = new Map<string, TaskBudget>();
 
   function clearTaskBudget(taskId: string) {
@@ -389,6 +382,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   // session_switch fires on resume (reason: "resume") — reload persisted tasks.
+  // Cast: session_switch is a de-facto pi lifecycle event not yet in the public types.
+  // TODO: remove cast once pi SDK exports session_switch in ExtensionAPI.on() overloads.
   pi.on("session_switch" as any, async (event: any, ctx: ExtensionContext) => {
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
