@@ -252,6 +252,104 @@ export default function (pi: ExtensionAPI) {
     widget.update();
   }));
 
+  // ── Task RPC handlers ──
+  // Allow other extensions (e.g., plan-executor) to create/update tasks
+  // via the event bus, following the same request/reply pattern as
+  // subagents:rpc:*.
+
+  // Ping: presence detection
+  eventUnsubs.push(pi.events.on("tasks:rpc:ping", (payload: unknown) => {
+    const { requestId } = payload as { requestId: string };
+    pi.events.emit(`tasks:rpc:ping:reply:${requestId}`, {});
+  }));
+
+  // Broadcast availability (covers: tasks loads after requester)
+  pi.events.emit("tasks:ready", {});
+
+  // createMany: batch create tasks with optional deps
+  eventUnsubs.push(pi.events.on("tasks:rpc:createMany", (payload: unknown) => {
+    const { requestId, tasks: taskDefs, clearCompleted: clear } =
+      payload as {
+        requestId: string;
+        tasks: Array<{
+          subject: string;
+          description: string;
+          activeForm?: string;
+          metadata?: Record<string, any>;
+          status?: TaskStatus;
+          blockedBy?: string[];
+          blocks?: string[];
+        }>;
+        clearCompleted?: boolean;
+      };
+
+    try {
+      if (clear) store.clearCompleted();
+
+      // Create all tasks first, collecting IDs
+      const created: Array<{ id: string; blockedBy?: string[]; blocks?: string[] }> = [];
+      for (const def of taskDefs) {
+        const task = store.create(
+          def.subject,
+          def.description,
+          def.activeForm,
+          def.metadata,
+          def.status ? { status: def.status } : undefined,
+        );
+        created.push({ id: task.id, blockedBy: def.blockedBy, blocks: def.blocks });
+      }
+
+      // Wire dependencies (IDs in blockedBy/blocks may reference
+      // tasks created in this batch, so we do it after all creates)
+      for (const c of created) {
+        if (c.blockedBy?.length || c.blocks?.length) {
+          store.update(c.id, {
+            ...(c.blockedBy?.length ? { addBlockedBy: c.blockedBy } : {}),
+            ...(c.blocks?.length ? { addBlocks: c.blocks } : {}),
+          });
+        }
+      }
+
+      widget.update();
+      pi.events.emit(`tasks:rpc:createMany:reply:${requestId}`, {
+        ids: created.map(c => c.id),
+      });
+    } catch (err: any) {
+      pi.events.emit(`tasks:rpc:createMany:reply:${requestId}`, {
+        error: err.message,
+      });
+    }
+  }));
+
+  // update: update a single task
+  eventUnsubs.push(pi.events.on("tasks:rpc:update", (payload: unknown) => {
+    const { requestId, taskId, fields } =
+      payload as {
+        requestId: string;
+        taskId: string;
+        fields: {
+          status?: TaskStatus | "deleted";
+          subject?: string;
+          description?: string;
+          activeForm?: string;
+          owner?: string;
+          metadata?: Record<string, any>;
+        };
+      };
+
+    try {
+      const result = store.update(taskId, fields);
+      widget.update();
+      pi.events.emit(`tasks:rpc:update:reply:${requestId}`, {
+        success: !!result.task,
+      });
+    } catch (err: any) {
+      pi.events.emit(`tasks:rpc:update:reply:${requestId}`, {
+        error: err.message,
+      });
+    }
+  }));
+
   // ── Session-scoped store upgrade ──
   // For session scope, the store starts in-memory (no session ID at init time).
   // Upgrade to file-backed on first context arrival (turn_start, before_agent_start,
