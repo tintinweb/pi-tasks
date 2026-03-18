@@ -12,7 +12,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 
 ## Features
 
-- **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
+- **8 LLM-callable tools** — `TaskCreate`, `TaskCreateMany`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
 - **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time and token counts
 - **System-reminder injection** — periodic `<system-reminder>` nudges appended to tool results when task tools haven't been used recently (matches Claude Code's behavior exactly)
 - **Prompt guidelines** — workflow contract encoded in tool descriptions, nudging the LLM at the point of tool use
@@ -66,9 +66,31 @@ Create a structured task. Used proactively for complex multi-step work.
 | `activeForm` | string | no | Present continuous form for spinner (e.g., "Running tests") |
 | `agentType` | string | no | Agent type for subagent execution (e.g., `"general-purpose"`, `"Explore"`) |
 | `metadata` | object | no | Arbitrary key-value pairs |
+| `blockedBy` | string[] | no | Task IDs that block this task |
+| `blocks` | string[] | no | Task IDs that this task blocks |
+| `status` | `pending` / `in_progress` | no | Initial status (default: `pending`) |
+| `clearCompleted` | boolean | no | Clear completed/skipped tasks before creating |
 
 ```
 → Task #1 created successfully: Fix authentication bug
+```
+
+### `TaskCreateMany`
+
+Create multiple tasks in a single call — reduces round-trips when setting up a task list.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tasks` | array | yes | Array of task objects (same fields as TaskCreate except `clearCompleted`) |
+| `clearCompleted` | boolean | no | Clear completed/skipped tasks before creating |
+
+Tasks are created in array order with sequential IDs. Use the expected IDs in `blockedBy`/`blocks` to wire dependencies within the same batch.
+
+```
+→ Created 3 task(s):
+  #1: Set up database schema
+  #2: Implement API endpoints
+  #3: Write integration tests
 ```
 
 ### `TaskList`
@@ -105,7 +127,7 @@ Update task fields, status, metadata, and dependencies.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `taskId` | string | Task ID (required) |
-| `status` | `pending` / `in_progress` / `completed` / `deleted` | New status |
+| `status` | `pending` / `in_progress` / `completed` / `skipped` / `deleted` | New status |
 | `subject` | string | New title |
 | `description` | string | New description |
 | `activeForm` | string | Spinner text |
@@ -154,6 +176,8 @@ Execute one or more tasks as background subagents. Requires [@tintinweb/pi-subag
 | `additional_context` | string | Extra context appended to each agent's prompt |
 | `model` | string | Model override (e.g., `"sonnet"`, `"haiku"`) |
 | `max_turns` | number | Max turns per agent |
+| `token_budget` | number | Approximate token budget per agent (display/tracking only) |
+| `timeout_ms` | number | Max wall-clock time in ms — marks task completed and emits stop RPC |
 
 Tasks must be `pending`, have `agentType` set, and all `blockedBy` dependencies `completed`. Each task spawns as an independent background subagent.
 
@@ -188,7 +212,7 @@ Task storage is controlled by the `taskScope` setting (`/tasks` → Settings →
 
 On new session start, if all persisted tasks are completed they are auto-cleared for a clean slate. On session resume, all tasks (including completed) are shown so the user can review progress. Empty session files are automatically deleted when all tasks are cleared.
 
-Settings (`taskScope`, `autoCascade`) are saved to `<cwd>/.pi/tasks-config.json`.
+Settings (`taskScope`, `autoCascade`, `nudgeInterval`, `autoClearCompleted`) are saved to `<cwd>/.pi/tasks-config.json`.
 
 ### Override via environment variables
 
@@ -288,7 +312,7 @@ src/
 ├── index.ts            # Extension entry: 7 tools + /tasks command + widget + subagent integration
 ├── types.ts            # Task, TaskStatus, BackgroundProcess types
 ├── task-store.ts       # File-backed store with CRUD, dependencies, locking
-├── tasks-config.ts     # Config persistence (taskScope, autoCascade) → .pi/tasks-config.json
+├── tasks-config.ts     # Config persistence (taskScope, autoCascade, nudgeInterval, autoClearCompleted) → .pi/tasks-config.json
 ├── process-tracker.ts  # Background process output buffering and stop
 └── ui/
     ├── task-widget.ts  # Persistent widget with status icons and spinner
@@ -304,7 +328,7 @@ src/
 ```bash
 npm install
 npm run typecheck   # TypeScript validation
-npm test            # Run unit tests (116 tests)
+npm test            # Run unit tests (165 tests)
 ```
 
 ## License

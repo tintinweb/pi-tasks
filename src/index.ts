@@ -216,7 +216,7 @@ export default function (pi: ExtensionAPI) {
         t.status === "pending" &&
         t.metadata?.agentType &&
         t.blockedBy.includes(task.id) &&
-        t.blockedBy.every(depId => { const s = store.get(depId)?.status; return s === "completed" || s === "skipped"; })
+        t.blockedBy.every(depId => { const s = store.get(depId)?.status; return s !== undefined && isTerminalStatus(s); })
       );
       for (const next of unblocked) {
         store.update(next.id, { status: "in_progress" });
@@ -226,6 +226,7 @@ export default function (pi: ExtensionAPI) {
             description: next.subject,
             isBackground: true,
             maxTurns: cascadeConfig.maxTurns,
+            ...(cascadeConfig.model && { model: cascadeConfig.model }),
           });
           agentTaskMap.set(agentId, next.id);
           store.update(next.id, { owner: agentId, metadata: { ...next.metadata, agentId } });
@@ -254,6 +255,7 @@ export default function (pi: ExtensionAPI) {
     });
     widget.setActiveTask(task.id, false);
     clearTaskBudget(taskId);
+    taskCascadeConfigs.delete(taskId);
     widget.update();
   }));
 
@@ -792,7 +794,7 @@ Set up task dependencies:
       // Update widget active task tracking
       if (fields.status === "in_progress") {
         widget.setActiveTask(taskId);
-      } else if (fields.status === "completed" || fields.status === "skipped" || fields.status === "deleted") {
+      } else if ((fields.status && isTerminalStatus(fields.status)) || fields.status === "deleted") {
         widget.setActiveTask(taskId, false);
       }
 
@@ -965,6 +967,7 @@ Set up task dependencies:
             description: task.subject,
             isBackground: true,
             maxTurns: params.max_turns,
+            ...(params.model && { model: params.model }),
           }, signal ?? undefined);
           agentTaskMap.set(agentId, taskId);
           store.update(taskId, { owner: agentId, metadata: { ...task.metadata, agentId } });
@@ -985,6 +988,12 @@ Set up task dependencies:
             };
             if (params.timeout_ms) {
               budget.timer = setTimeout(() => {
+                // Find and remove the agent mapping; capture the agent ID for stop RPC
+                let timedOutAgentId: string | undefined;
+                for (const [aid, tid] of agentTaskMap) {
+                  if (tid === taskId) { timedOutAgentId = aid; agentTaskMap.delete(aid); break; }
+                }
+                taskCascadeConfigs.delete(taskId);
                 // Auto-complete on timeout
                 store.update(taskId, {
                   status: "completed",
@@ -993,6 +1002,11 @@ Set up task dependencies:
                 widget.setActiveTask(taskId, false);
                 clearTaskBudget(taskId);
                 widget.update();
+                // Best-effort: request the subagent extension to stop the agent.
+                // pi-subagents may or may not handle this channel yet.
+                if (timedOutAgentId) {
+                  pi.events.emit("subagents:rpc:stop", { agentId: timedOutAgentId });
+                }
               }, params.timeout_ms);
             }
             taskBudgets.set(taskId, budget);
@@ -1034,7 +1048,7 @@ Set up task dependencies:
       const mainMenu = async (): Promise<void> => {
         const tasks = store.list();
         const taskCount = tasks.length;
-        const terminalCount = tasks.filter(t => t.status === "completed" || t.status === "skipped").length;
+        const terminalCount = tasks.filter(t => isTerminalStatus(t.status)).length;
 
         const choices: string[] = [
           `View all tasks (${taskCount})`,
@@ -1170,6 +1184,7 @@ Set up task dependencies:
       taskBudgets.clear();
       unsubPing();
       unsubReady();
+      tracker.dispose();
       widget.dispose();
     },
   };

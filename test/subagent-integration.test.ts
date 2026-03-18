@@ -57,9 +57,12 @@ function mockPi() {
     },
     /** Fire lifecycle event handlers (turn_start, tool_result, etc.) */
     async fireLifecycle(event: string, ...args: any[]) {
+      let lastResult: any;
       for (const h of lifecycleHandlers.get(event) ?? []) {
-        await h(...args);
+        const r = await h(...args);
+        if (r !== undefined) lastResult = r;
       }
+      return lastResult;
     },
     /** Emit an event on pi.events (simulates subagent extension). */
     emitEvent(channel: string, data: unknown) {
@@ -225,6 +228,62 @@ describe("TaskExecute", () => {
 
     expect(rpc.spawned[0].prompt).toContain("Focus on REST endpoints only");
     expect(rpc.spawned[0].options.maxTurns).toBe(10);
+  });
+
+  it("passes model to spawned agents", async () => {
+    await mock.executeTool("TaskCreate", {
+      subject: "Model override test",
+      description: "Test with specific model",
+      agentType: "general-purpose",
+    });
+
+    await mock.executeTool("TaskExecute", {
+      task_ids: ["1"],
+      model: "sonnet",
+    });
+
+    expect(rpc.spawned).toHaveLength(1);
+    expect(rpc.spawned[0].options.model).toBe("sonnet");
+  });
+
+  it("emits stop RPC when timeout_ms fires", async () => {
+    vi.useFakeTimers();
+
+    await mock.executeTool("TaskCreate", {
+      subject: "Timeout test",
+      description: "Desc",
+      agentType: "general-purpose",
+    });
+
+    // Capture events emitted on the bus
+    const emitted: Array<{ channel: string; data: unknown }> = [];
+    const origEmit = mock.pi.events.emit.bind(mock.pi.events);
+    mock.pi.events.emit = (channel: string, data: unknown) => {
+      emitted.push({ channel, data });
+      origEmit(channel, data);
+    };
+
+    await mock.executeTool("TaskExecute", {
+      task_ids: ["1"],
+      timeout_ms: 5000,
+    });
+
+    expect(rpc.spawned).toHaveLength(1);
+    const agentId = rpc.spawned[0].id;
+
+    // Advance past timeout
+    await vi.advanceTimersByTimeAsync(6000);
+
+    // Task should be marked completed with timedOut
+    const result = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(result.content[0].text).toContain("Status: completed");
+
+    // Should have emitted a stop RPC
+    const stopEvent = emitted.find(e => e.channel === "subagents:rpc:stop");
+    expect(stopEvent).toBeDefined();
+    expect((stopEvent!.data as any).agentId).toBe(agentId);
+
+    vi.useRealTimers();
   });
 
   it("allows executing tasks whose blockers are all completed", async () => {
@@ -790,23 +849,26 @@ describe("Nudge suppression", () => {
     await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
 
     // Fire enough turns to normally trigger a nudge
+    let nudgeCount = 0;
     for (let i = 0; i < 10; i++) {
       await mock.fireLifecycle("turn_start", {}, mockCtx());
       const result = await mock.fireLifecycle("tool_result", {
         toolName: "SomeOtherTool",
         content: [{ type: "text", text: "result" }],
       });
-      // No system-reminder should be injected
+      // Count any system-reminder injections
       if (result) {
         const merged = Array.isArray(result) ? result : [result];
         for (const r of merged) {
           if (r?.content) {
             const texts = r.content.map((c: any) => c.text || "").join("");
-            expect(texts).not.toContain("system-reminder");
+            if (texts.includes("system-reminder")) nudgeCount++;
           }
         }
       }
     }
+    // No nudges should have been injected across all iterations
+    expect(nudgeCount).toBe(0);
   });
 });
 
@@ -917,6 +979,202 @@ describe("Enhanced TaskCreate", () => {
     const listResult = await mock.executeTool("TaskList", {});
     expect(listResult.content[0].text).not.toContain("Old task");
     expect(listResult.content[0].text).toContain("New task");
+  });
+});
+
+describe("Orphan reminder on resume", () => {
+  let mock: ReturnType<typeof mockPi>;
+
+  beforeEach(() => {
+    mock = mockPi();
+    initExtension(mock.pi as any);
+  });
+
+  it("builds reminder for in_progress tasks on resume", async () => {
+    // Create tasks and mark one in_progress
+    await mock.executeTool("TaskCreate", { subject: "Task A", description: "desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+
+    // Simulate session resume
+    await mock.fireLifecycle("session_switch", { reason: "resume" }, mockCtx());
+
+    // First tool_result after resume should inject the orphan reminder
+    const result = await mock.fireLifecycle("tool_result", {
+      toolName: "SomeOtherTool",
+      content: [{ type: "text", text: "result" }],
+    });
+
+    const merged = Array.isArray(result) ? result : [result];
+    const texts = merged
+      .filter((r: any) => r?.content)
+      .flatMap((r: any) => r.content.map((c: any) => c.text || ""))
+      .join("");
+    expect(texts).toContain("system-reminder");
+    expect(texts).toContain("#1");
+    expect(texts).toContain("in_progress");
+  });
+
+  it("clears orphan reminder after first injection", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Task A", description: "desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+
+    await mock.fireLifecycle("session_switch", { reason: "resume" }, mockCtx());
+
+    // First tool_result consumes the reminder
+    await mock.fireLifecycle("tool_result", {
+      toolName: "SomeOtherTool",
+      content: [{ type: "text", text: "result" }],
+    });
+
+    // Second tool_result should be clean (no reminder)
+    const result2 = await mock.fireLifecycle("tool_result", {
+      toolName: "SomeOtherTool",
+      content: [{ type: "text", text: "result" }],
+    });
+
+    if (result2) {
+      const merged = Array.isArray(result2) ? result2 : [result2];
+      const texts = merged
+        .filter((r: any) => r?.content)
+        .flatMap((r: any) => r.content.map((c: any) => c.text || ""))
+        .join("");
+      expect(texts).not.toContain("system-reminder");
+    }
+  });
+
+  it("does not build reminder when no tasks are in_progress", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Task A", description: "desc" });
+    // Task stays pending — no in_progress tasks
+
+    await mock.fireLifecycle("session_switch", { reason: "resume" }, mockCtx());
+
+    const result = await mock.fireLifecycle("tool_result", {
+      toolName: "SomeOtherTool",
+      content: [{ type: "text", text: "result" }],
+    });
+
+    if (result) {
+      const merged = Array.isArray(result) ? result : [result];
+      const texts = merged
+        .filter((r: any) => r?.content)
+        .flatMap((r: any) => r.content.map((c: any) => c.text || ""))
+        .join("");
+      expect(texts).not.toContain("in_progress");
+    }
+  });
+});
+
+describe("Auto-cascade with skipped blocker", () => {
+  let mock: ReturnType<typeof mockPi>;
+  let rpc: ReturnType<typeof installSubagentsMock>;
+
+  beforeEach(() => {
+    mock = mockPi();
+    rpc = installSubagentsMock(mock.pi);
+    initExtension(mock.pi as any);
+  });
+
+  afterEach(() => {
+    rpc.unsub();
+  });
+
+  it("cascades to dependent when blocker is skipped (autoCascade enabled)", async () => {
+    // Enable autoCascade by writing a config file
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const configDir = join(process.cwd(), ".pi");
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, "tasks-config.json");
+    writeFileSync(configPath, JSON.stringify({ autoCascade: true }));
+
+    // Re-init to pick up the new config
+    const freshMock = mockPi();
+    const freshRpc = installSubagentsMock(freshMock.pi);
+    initExtension(freshMock.pi as any);
+
+    try {
+      // Set latestCtx so cascade handler can spawn agents
+      await freshMock.fireLifecycle("tool_execution_start", {}, mockCtx());
+
+      // Create A → B dependency chain
+      await freshMock.executeTool("TaskCreate", {
+        subject: "Task A (blocker)",
+        description: "Desc",
+        agentType: "general-purpose",
+      });
+      await freshMock.executeTool("TaskCreate", {
+        subject: "Task B (dependent)",
+        description: "Desc",
+        agentType: "general-purpose",
+      });
+      await freshMock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
+
+      // Execute A
+      await freshMock.executeTool("TaskExecute", { task_ids: ["1"] });
+      expect(freshRpc.spawned).toHaveLength(1);
+
+      // Complete A — should cascade to B
+      freshMock.emitEvent("subagents:completed", { id: "agent-1" });
+
+      // B should have been auto-started via cascade
+      expect(freshRpc.spawned).toHaveLength(2);
+
+      // Verify B is in_progress
+      const result = await freshMock.executeTool("TaskGet", { taskId: "2" });
+      expect(result.content[0].text).toContain("Status: in_progress");
+    } finally {
+      freshRpc.unsub();
+      // Clean up config file
+      const { unlinkSync } = await import("node:fs");
+      try { unlinkSync(configPath); } catch { /* ignore */ }
+    }
+  });
+
+  it("propagates model to cascaded agents", async () => {
+    const { writeFileSync, mkdirSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const configDir = join(process.cwd(), ".pi");
+    mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, "tasks-config.json");
+    writeFileSync(configPath, JSON.stringify({ autoCascade: true }));
+
+    const freshMock = mockPi();
+    const freshRpc = installSubagentsMock(freshMock.pi);
+    initExtension(freshMock.pi as any);
+
+    try {
+      await freshMock.fireLifecycle("tool_execution_start", {}, mockCtx());
+
+      await freshMock.executeTool("TaskCreate", {
+        subject: "Task A",
+        description: "Desc",
+        agentType: "general-purpose",
+      });
+      await freshMock.executeTool("TaskCreate", {
+        subject: "Task B",
+        description: "Desc",
+        agentType: "general-purpose",
+      });
+      await freshMock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
+
+      // Execute A with model override
+      await freshMock.executeTool("TaskExecute", {
+        task_ids: ["1"],
+        model: "haiku",
+      });
+      expect(freshRpc.spawned).toHaveLength(1);
+      expect(freshRpc.spawned[0].options.model).toBe("haiku");
+
+      // Complete A — should cascade to B with same model
+      freshMock.emitEvent("subagents:completed", { id: "agent-1" });
+
+      expect(freshRpc.spawned).toHaveLength(2);
+      expect(freshRpc.spawned[1].options.model).toBe("haiku");
+    } finally {
+      freshRpc.unsub();
+      const { unlinkSync } = await import("node:fs");
+      try { unlinkSync(configPath); } catch { /* ignore */ }
+    }
   });
 });
 
