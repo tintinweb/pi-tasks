@@ -528,6 +528,26 @@ describe("Collapse completed tasks", () => {
     expect(lines.some(l => l.includes("Done 2"))).toBe(true);
   });
 
+  it("shows 'and N more' when 12+ active tasks with collapse", () => {
+    // 12 active + 2 completed → collapse triggers, 10 visible active, "2 more" shown
+    for (let i = 1; i <= 12; i++) {
+      store.create(`Active ${i}`, "Desc");
+    }
+    store.create("Done 1", "Desc");
+    store.create("Done 2", "Desc");
+    store.update("13", { status: "completed" });
+    store.update("14", { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // Should have: header + 10 active tasks + "and 2 more" + collapsed summary
+    expect(lines.some(l => l.includes("2 more"))).toBe(true);
+    // Completed tasks should be collapsed (not shown individually)
+    expect(lines.some(l => l.includes("Done 1"))).toBe(false);
+    expect(lines.some(l => l.includes("Done 2"))).toBe(false);
+    expect(lines.some(l => l.includes("2 completed"))).toBe(true);
+  });
+
   it("includes skipped in collapsed summary", () => {
     store.create("Active 1", "Desc");
     store.create("Active 2", "Desc");
