@@ -775,3 +775,190 @@ describe("Widget agent ID display", () => {
     expect(lines[1]).not.toContain("agent abc");
   });
 });
+
+describe("Nudge suppression", () => {
+  let mock: ReturnType<typeof mockPi>;
+
+  beforeEach(() => {
+    mock = mockPi();
+    initExtension(mock.pi as any);
+  });
+
+  it("suppresses nudge when tasks are in_progress", async () => {
+    // Create a task and mark in_progress
+    await mock.executeTool("TaskCreate", { subject: "Active", description: "desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+
+    // Fire enough turns to normally trigger a nudge
+    for (let i = 0; i < 10; i++) {
+      await mock.fireLifecycle("turn_start", {}, mockCtx());
+      const result = await mock.fireLifecycle("tool_result", {
+        toolName: "SomeOtherTool",
+        content: [{ type: "text", text: "result" }],
+      });
+      // No system-reminder should be injected
+      if (result) {
+        const merged = Array.isArray(result) ? result : [result];
+        for (const r of merged) {
+          if (r?.content) {
+            const texts = r.content.map((c: any) => c.text || "").join("");
+            expect(texts).not.toContain("system-reminder");
+          }
+        }
+      }
+    }
+  });
+});
+
+describe("TaskCreateMany", () => {
+  let mock: ReturnType<typeof mockPi>;
+
+  beforeEach(() => {
+    mock = mockPi();
+    initExtension(mock.pi as any);
+  });
+
+  it("is registered as a tool", () => {
+    expect(mock.tools.has("TaskCreateMany")).toBe(true);
+  });
+
+  it("creates multiple tasks in one call", async () => {
+    const result = await mock.executeTool("TaskCreateMany", {
+      tasks: [
+        { subject: "Task A", description: "First" },
+        { subject: "Task B", description: "Second" },
+        { subject: "Task C", description: "Third" },
+      ],
+    });
+
+    expect(result.content[0].text).toContain("Created 3 task(s)");
+    expect(result.content[0].text).toContain("Task A");
+    expect(result.content[0].text).toContain("Task B");
+    expect(result.content[0].text).toContain("Task C");
+  });
+
+  it("creates tasks with dependencies in batch", async () => {
+    await mock.executeTool("TaskCreateMany", {
+      tasks: [
+        { subject: "First", description: "desc" },
+        { subject: "Second", description: "desc", blockedBy: ["1"] },
+      ],
+    });
+
+    const result = await mock.executeTool("TaskGet", { taskId: "2" });
+    expect(result.content[0].text).toContain("Blocked by: #1");
+  });
+});
+
+describe("Enhanced TaskCreate", () => {
+  let mock: ReturnType<typeof mockPi>;
+
+  beforeEach(() => {
+    mock = mockPi();
+    initExtension(mock.pi as any);
+  });
+
+  it("creates task with blockedBy in one call", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Blocker", description: "desc" });
+    await mock.executeTool("TaskCreate", {
+      subject: "Blocked",
+      description: "desc",
+      blockedBy: ["1"],
+    });
+
+    const result = await mock.executeTool("TaskGet", { taskId: "2" });
+    expect(result.content[0].text).toContain("Blocked by: #1");
+  });
+
+  it("creates task with blocks in one call", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Dependent", description: "desc" });
+    await mock.executeTool("TaskCreate", {
+      subject: "Blocker",
+      description: "desc",
+      blocks: ["1"],
+    });
+
+    const result = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(result.content[0].text).toContain("Blocked by: #2");
+  });
+
+  it("returns rich format with status and description", async () => {
+    const result = await mock.executeTool("TaskCreate", {
+      subject: "Rich task",
+      description: "Detailed description here",
+    });
+
+    expect(result.content[0].text).toContain("Task #1: Rich task");
+    expect(result.content[0].text).toContain("Status: pending");
+    expect(result.content[0].text).toContain("Description: Detailed description here");
+  });
+
+  it("creates task with in_progress status", async () => {
+    await mock.executeTool("TaskCreate", {
+      subject: "Start immediately",
+      description: "desc",
+      status: "in_progress",
+    });
+
+    const result = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(result.content[0].text).toContain("Status: in_progress");
+  });
+
+  it("clears completed tasks before creating when clearCompleted is true", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Old task", description: "desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" });
+
+    await mock.executeTool("TaskCreate", {
+      subject: "New task",
+      description: "desc",
+      clearCompleted: true,
+    });
+
+    const listResult = await mock.executeTool("TaskList", {});
+    expect(listResult.content[0].text).not.toContain("Old task");
+    expect(listResult.content[0].text).toContain("New task");
+  });
+});
+
+describe("Skipped status in tools", () => {
+  let mock: ReturnType<typeof mockPi>;
+  let rpc: ReturnType<typeof installSubagentsMock>;
+
+  beforeEach(() => {
+    mock = mockPi();
+    rpc = installSubagentsMock(mock.pi);
+    initExtension(mock.pi as any);
+  });
+
+  afterEach(() => {
+    rpc.unsub();
+  });
+
+  it("accepts skipped status in TaskUpdate", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Skip me", description: "desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "skipped" });
+    const result = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(result.content[0].text).toContain("Status: skipped");
+  });
+
+  it("skipped task unblocks dependents", async () => {
+    await mock.executeTool("TaskCreate", {
+      subject: "Blocker",
+      description: "desc",
+      agentType: "general-purpose",
+    });
+    await mock.executeTool("TaskCreate", {
+      subject: "Dependent",
+      description: "desc",
+      agentType: "general-purpose",
+    });
+    await mock.executeTool("TaskUpdate", { taskId: "2", addBlockedBy: ["1"] });
+
+    // Skip the blocker
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "skipped" });
+
+    // Dependent should be executable now
+    const result = await mock.executeTool("TaskExecute", { task_ids: ["2"] });
+    expect(result.content[0].text).toContain("Launched 1 agent");
+  });
+});

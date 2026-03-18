@@ -20,9 +20,12 @@ import { TaskStore } from "./task-store.js";
 import { ProcessTracker } from "./process-tracker.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
 import { loadTasksConfig } from "./tasks-config.js";
+import { isTerminalStatus } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 
 // ---- Helpers ----
 
@@ -30,8 +33,22 @@ function textResult(msg: string) {
   return { content: [{ type: "text" as const, text: msg }], details: undefined };
 }
 
+/** Format a task as a multi-line detail string (reused by TaskCreate and TaskGet). */
+function formatTaskDetail(task: { id: string; subject: string; description: string; status: string; owner?: string; blockedBy: string[]; blocks: string[] }): string {
+  const lines: string[] = [
+    `Task #${task.id}: ${task.subject}`,
+    `Status: ${task.status}`,
+  ];
+  if (task.owner) lines.push(`Owner: ${task.owner}`);
+  const desc = task.description.replace(/\\n/g, "\n");
+  lines.push(`Description: ${desc}`);
+  if (task.blockedBy.length > 0) lines.push(`Blocked by: ${task.blockedBy.map(id => "#" + id).join(", ")}`);
+  if (task.blocks.length > 0) lines.push(`Blocks: ${task.blocks.map(id => "#" + id).join(", ")}`);
+  return lines.join("\n");
+}
+
 /** Task tool names — used to detect task tool usage for reminder suppression. */
-const TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskOutput", "TaskStop", "TaskExecute"]);
+const TASK_TOOL_NAMES = new Set(["TaskCreate", "TaskCreateMany", "TaskList", "TaskGet", "TaskUpdate", "TaskOutput", "TaskStop", "TaskExecute"]);
 
 /** How many turns without task tool usage before injecting a reminder. */
 const REMINDER_INTERVAL = 4;
@@ -41,6 +58,16 @@ The task tools haven't been used recently. If you're working on tasks that would
 </system-reminder>`;
 
 export default function (pi: ExtensionAPI) {
+  // ── Duplicate installation detection ──
+  try {
+    const gitInstallPath = join(homedir(), ".pi", "agent", "git", "pi-tasks");
+    const hasGitInstall = existsSync(gitInstallPath);
+    const isNpmGlobal = import.meta.url?.includes("node_modules");
+    if (hasGitInstall && isNpmGlobal) {
+      console.warn("[pi-tasks] Warning: detected both git (~/.pi/agent/git/pi-tasks) and npm global installations. This may cause conflicts — consider removing one.");
+    }
+  } catch { /* ignore detection errors */ }
+
   // Initialize store and config
   const cfg = loadTasksConfig();
   const piTasks = process.env.PI_TASKS;
@@ -73,6 +100,23 @@ export default function (pi: ExtensionAPI) {
   const taskCascadeConfigs = new Map<string, { additionalContext?: string; model?: string; maxTurns?: number }>();
   /** Maps agent IDs to task IDs for O(1) completion lookup. */
   const agentTaskMap = new Map<string, string>();
+
+  // ── Task-level budget/timeout tracking ──
+  interface TaskBudget {
+    startedAt: number;
+    tokenBudget?: number;
+    tokensUsed: number;
+    timeoutMs?: number;
+    timer?: ReturnType<typeof setTimeout>;
+  }
+  const taskBudgets = new Map<string, TaskBudget>();
+
+  function clearTaskBudget(taskId: string) {
+    const budget = taskBudgets.get(taskId);
+    if (budget?.timer) clearTimeout(budget.timer);
+    taskBudgets.delete(taskId);
+    widget.clearBudget(taskId);
+  }
 
   // ── Subagent extension presence detection ──
   // Two paths: (1) listen for ready broadcast (subagents loads first),
@@ -162,6 +206,7 @@ export default function (pi: ExtensionAPI) {
 
     store.update(task.id, { status: "completed", metadata: { ...task.metadata, result } });
     widget.setActiveTask(task.id, false);
+    clearTaskBudget(taskId);
 
     // Auto-cascade: find unblocked dependents with agentType
     const cascadeConfig = taskCascadeConfigs.get(taskId);
@@ -171,7 +216,7 @@ export default function (pi: ExtensionAPI) {
         t.status === "pending" &&
         t.metadata?.agentType &&
         t.blockedBy.includes(task.id) &&
-        t.blockedBy.every(depId => store.get(depId)?.status === "completed")
+        t.blockedBy.every(depId => { const s = store.get(depId)?.status; return s === "completed" || s === "skipped"; })
       );
       for (const next of unblocked) {
         store.update(next.id, { status: "in_progress" });
@@ -208,6 +253,7 @@ export default function (pi: ExtensionAPI) {
       metadata: { ...task.metadata, lastError: error || status },
     });
     widget.setActiveTask(task.id, false);
+    clearTaskBudget(taskId);
     widget.update();
   }));
 
@@ -228,6 +274,9 @@ export default function (pi: ExtensionAPI) {
     storeUpgraded = true;
   }
 
+  /** One-time orphan reminder built at resume, consumed+cleared by tool_result handler. */
+  let pendingOrphanReminder: string | undefined;
+
   /** Restore widget on session start/resume if there's unfinished work.
    *  On new sessions, auto-clear if all tasks are completed (clean slate).
    *  On resume, always show tasks (user may want to review).
@@ -237,11 +286,18 @@ export default function (pi: ExtensionAPI) {
     persistedTasksShown = true;
     const tasks = store.list();
     if (tasks.length > 0) {
-      if (!isResume && tasks.every(t => t.status === "completed")) {
+      if (!isResume && tasks.every(t => isTerminalStatus(t.status))) {
         store.clearCompleted();
         if (taskScope === "session") store.deleteFileIfEmpty();
       } else {
         widget.update();
+        // Build one-time orphan reminder for in_progress tasks on resume
+        if (isResume) {
+          const orphanIds = tasks.filter(t => t.status === "in_progress").map(t => `#${t.id}`);
+          if (orphanIds.length > 0) {
+            pendingOrphanReminder = `<system-reminder>Session resumed. The following tasks were in_progress and may need attention (their agents are no longer running): ${orphanIds.join(", ")}. Consider completing, skipping, or restarting them.</system-reminder>`;
+          }
+        }
       }
     }
   }
@@ -263,7 +319,20 @@ export default function (pi: ExtensionAPI) {
   pi.on("turn_end", async (event) => {
     const msg = event.message as any;
     if (msg?.role === "assistant" && msg.usage) {
+      const totalTokens = (msg.usage.input ?? 0) + (msg.usage.output ?? 0);
       widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0);
+
+      // Best-effort token budget tracking for active tasks
+      for (const [taskId, budget] of taskBudgets) {
+        if (!budget.tokenBudget) continue;
+        budget.tokensUsed += totalTokens;
+        widget.setBudget(taskId, {
+          tokenBudget: budget.tokenBudget,
+          tokensUsed: budget.tokensUsed,
+          startedAt: budget.startedAt,
+          timeoutMs: budget.timeoutMs,
+        });
+      }
     }
   });
 
@@ -271,6 +340,15 @@ export default function (pi: ExtensionAPI) {
   // Appends a <system-reminder> nudge to non-task tool results when tasks exist
   // but task tools haven't been used recently (mimics Claude Code's behavior).
   pi.on("tool_result", async (event) => {
+    // One-time orphaned task notification on resume
+    if (pendingOrphanReminder) {
+      const reminder = pendingOrphanReminder;
+      pendingOrphanReminder = undefined;
+      return {
+        content: [...event.content, { type: "text" as const, text: reminder }],
+      };
+    }
+
     // Task tool usage resets the reminder timer
     if (TASK_TOOL_NAMES.has(event.toolName)) {
       lastTaskToolUseTurn = currentTurn;
@@ -279,11 +357,16 @@ export default function (pi: ExtensionAPI) {
     }
 
     // Cheap checks first — avoid store.list() disk I/O when possible
-    if (currentTurn - lastTaskToolUseTurn < REMINDER_INTERVAL) return {};
+    const nudgeInterval = cfg.nudgeInterval ?? REMINDER_INTERVAL;
+    if (nudgeInterval === 0) return {}; // nudges disabled
+    if (currentTurn - lastTaskToolUseTurn < nudgeInterval) return {};
     if (reminderInjectedThisCycle) return {};
 
     const tasks = store.list();
     if (tasks.length === 0) return {};
+
+    // Suppress nudges when any task is actively being worked on
+    if (tasks.some(t => t.status === "in_progress")) return {};
 
     // Append system-reminder to tool result content.
     // Reset the baseline so the next reminder fires REMINDER_INTERVAL turns later.
@@ -318,6 +401,34 @@ export default function (pi: ExtensionAPI) {
     upgradeStoreIfNeeded(ctx);
     widget.update();
   });
+
+  /** Shared logic for creating a single task (used by TaskCreate and TaskCreateMany). */
+  function createSingleTask(params: {
+    subject: string; description: string; activeForm?: string; agentType?: string;
+    metadata?: Record<string, any>; blockedBy?: string[]; blocks?: string[];
+    status?: "pending" | "in_progress";
+  }) {
+    const meta = params.metadata ?? {};
+    if (params.agentType) meta.agentType = params.agentType;
+    const task = store.create(
+      params.subject, params.description, params.activeForm,
+      Object.keys(meta).length > 0 ? meta : undefined,
+      params.status ? { status: params.status } : undefined,
+    );
+
+    // Wire dependencies if provided
+    const depFields: { addBlocks?: string[]; addBlockedBy?: string[] } = {};
+    if (params.blocks?.length) depFields.addBlocks = params.blocks;
+    if (params.blockedBy?.length) depFields.addBlockedBy = params.blockedBy;
+    if (depFields.addBlocks || depFields.addBlockedBy) {
+      store.update(task.id, depFields);
+    }
+
+    if (params.status === "in_progress") {
+      widget.setActiveTask(task.id);
+    }
+    return task;
+  }
 
   // ──────────────────────────────────────────────────
   // Tool 1: TaskCreate
@@ -366,7 +477,17 @@ All tasks are created with status \`pending\`.
 - Include enough detail in the description for another agent to understand and complete the task
 - After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
 - Check TaskList first to avoid creating duplicate tasks
-- Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute`,
+- Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute
+
+## Subagent Execution
+
+To run a task as a subagent: (1) create the task with \`agentType\` set (e.g., "general-purpose"), then (2) call TaskExecute with the task ID. The agent receives the task description as its prompt and runs in the background. Monitor progress with TaskGet/TaskList.
+
+## Advanced Parameters
+
+- **blockedBy** / **blocks**: Set up dependencies at creation time (avoids a separate TaskUpdate call)
+- **status**: Create a task as \`in_progress\` to start working on it immediately (avoids a separate TaskUpdate call)
+- **clearCompleted**: Set to true to clear completed/skipped tasks before creating this one`,
     promptGuidelines: [
       "When working on complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status.",
       "Mark tasks as in_progress before starting work and completed when done.",
@@ -378,14 +499,77 @@ All tasks are created with status \`pending\`.
       activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
       agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
       metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
+      blockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task (sets up dependencies at creation)" })),
+      blocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks (sets up dependencies at creation)" })),
+      status: Type.Optional(Type.Unsafe<"pending" | "in_progress">({
+        type: "string", enum: ["pending", "in_progress"],
+        description: "Initial status — use 'in_progress' to start working immediately",
+      })),
+      clearCompleted: Type.Optional(Type.Boolean({ description: "Clear completed/skipped tasks before creating this one" })),
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const meta = params.metadata ?? {};
-      if (params.agentType) meta.agentType = params.agentType;
-      const task = store.create(params.subject, params.description, params.activeForm, Object.keys(meta).length > 0 ? meta : undefined);
+      const shouldClear = params.clearCompleted ?? (cfg.autoClearCompleted ?? false);
+      if (shouldClear) store.clearCompleted();
+
+      const task = createSingleTask(params);
       widget.update();
-      return Promise.resolve(textResult(`Task #${task.id} created successfully: ${task.subject}`));
+      return Promise.resolve(textResult(formatTaskDetail(store.get(task.id) ?? task)));
+    },
+  });
+
+  // ──────────────────────────────────────────────────
+  // Tool 1b: TaskCreateMany
+  // ──────────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "TaskCreateMany",
+    label: "TaskCreateMany",
+    description: `Create multiple tasks in a single call — reduces round-trips when setting up a task list.
+
+## When to Use This Tool
+
+- When you need to create 2 or more tasks at once (e.g., breaking down a plan into steps)
+- When tasks have dependencies on each other — blockedBy/blocks references use IDs of tasks created in this same batch
+- Replaces the pattern of calling TaskCreate + TaskUpdate multiple times
+
+## Batch Dependency References
+
+Tasks are created in array order with sequential IDs. Use the expected IDs in blockedBy/blocks.
+For example, if the next task ID is 5 and you create 3 tasks, they get IDs 5, 6, 7.
+Use TaskList first to determine the next available ID if needed.`,
+    parameters: Type.Object({
+      tasks: Type.Array(Type.Object({
+        subject: Type.String({ description: "A brief title for the task" }),
+        description: Type.String({ description: "A detailed description of what needs to be done" }),
+        activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress" })),
+        agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution" })),
+        metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata" })),
+        blockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task" })),
+        blocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks" })),
+        status: Type.Optional(Type.Unsafe<"pending" | "in_progress">({
+          type: "string", enum: ["pending", "in_progress"],
+          description: "Initial status",
+        })),
+      }), { description: "Array of tasks to create" }),
+      clearCompleted: Type.Optional(Type.Boolean({ description: "Clear completed/skipped tasks before creating" })),
+    }),
+
+    execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const shouldClear = params.clearCompleted ?? (cfg.autoClearCompleted ?? false);
+      if (shouldClear) store.clearCompleted();
+
+      const createdTasks: Array<{ id: string; subject: string }> = [];
+
+      for (const t of params.tasks) {
+        const task = createSingleTask(t);
+        createdTasks.push({ id: task.id, subject: task.subject });
+      }
+
+      widget.update();
+
+      const lines = createdTasks.map(t => `#${t.id}: ${t.subject}`);
+      return Promise.resolve(textResult(`Created ${createdTasks.length} task(s):\n${lines.join("\n")}`));
     },
   });
 
@@ -422,8 +606,8 @@ Use TaskGet with a specific task ID to view full details including description a
       const tasks = store.list();
       if (tasks.length === 0) return Promise.resolve(textResult("No tasks found"));
 
-      // Sort: pending first (by ID), then in_progress (by ID), then completed (by ID)
-      const statusOrder: Record<string, number> = { pending: 0, in_progress: 1, completed: 2 };
+      // Sort: pending first (by ID), then in_progress (by ID), then completed/skipped (by ID)
+      const statusOrder: Record<string, number> = { pending: 0, in_progress: 1, completed: 2, skipped: 3 };
       const sorted = [...tasks].sort((a, b) => {
         const so = (statusOrder[a.status] ?? 0) - (statusOrder[b.status] ?? 0);
         if (so !== 0) return so;
@@ -437,11 +621,11 @@ Use TaskGet with a specific task ID to view full details including description a
           line += ` (${task.owner})`;
         }
 
-        // Only show non-completed blockers
+        // Only show non-resolved blockers
         if (task.blockedBy.length > 0) {
           const openBlockers = task.blockedBy.filter(bid => {
             const blocker = store.get(bid);
-            return blocker && blocker.status !== "completed";
+            return blocker && !isTerminalStatus(blocker.status);
           });
           if (openBlockers.length > 0) {
             line += ` [blocked by ${openBlockers.map(id => "#" + id).join(", ")}]`;
@@ -490,27 +674,7 @@ Returns full task details:
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const task = store.get(params.taskId);
       if (!task) return Promise.resolve(textResult(`Task not found`));
-
-      // Unescape literal \n sequences the LLM may have double-escaped in JSON
-      const desc = task.description.replace(/\\n/g, "\n");
-
-      const lines: string[] = [
-        `Task #${task.id}: ${task.subject}`,
-        `Status: ${task.status}`,
-      ];
-      if (task.owner) {
-        lines.push(`Owner: ${task.owner}`);
-      }
-      lines.push(`Description: ${desc}`);
-
-      if (task.blockedBy.length > 0) {
-        lines.push(`Blocked by: ${task.blockedBy.map(id => "#" + id).join(", ")}`);
-      }
-      if (task.blocks.length > 0) {
-        lines.push(`Blocks: ${task.blocks.map(id => "#" + id).join(", ")}`);
-      }
-
-      return Promise.resolve(textResult(lines.join("\n")));
+      return Promise.resolve(textResult(formatTaskDetail(task)));
     },
   });
 
@@ -601,9 +765,9 @@ Set up task dependencies:
 \`\`\``,
     parameters: Type.Object({
       taskId: Type.String({ description: "The ID of the task to update" }),
-      status: Type.Optional(Type.Unsafe<"pending" | "in_progress" | "completed" | "deleted">({
+      status: Type.Optional(Type.Unsafe<"pending" | "in_progress" | "completed" | "skipped" | "deleted">({
         anyOf: [
-          { type: "string", enum: ["pending", "in_progress", "completed"] },
+          { type: "string", enum: ["pending", "in_progress", "completed", "skipped"] },
           { type: "string", const: "deleted" },
         ],
         description: "New status for the task",
@@ -628,7 +792,7 @@ Set up task dependencies:
       // Update widget active task tracking
       if (fields.status === "in_progress") {
         widget.setActiveTask(taskId);
-      } else if (fields.status === "completed" || fields.status === "deleted") {
+      } else if (fields.status === "completed" || fields.status === "skipped" || fields.status === "deleted") {
         widget.setActiveTask(taskId, false);
       }
 
@@ -729,20 +893,32 @@ Set up task dependencies:
 ## When to Use This Tool
 
 - To start execution of tasks that have \`agentType\` set (created via TaskCreate with agentType parameter)
-- Tasks must be \`pending\` with all blockedBy dependencies \`completed\`
+- Tasks must be \`pending\` with all blockedBy dependencies resolved (\`completed\` or \`skipped\`)
 - Each task runs as an independent background subagent
+
+## Workflow
+
+1. Create tasks with \`agentType\` set via TaskCreate (e.g., agentType: "general-purpose")
+2. Set up any dependencies via TaskCreate's blockedBy/blocks params or TaskUpdate
+3. Call TaskExecute with the task IDs to launch them as background agents
+4. Monitor progress with TaskGet/TaskList — status updates to "completed" or reverts to "pending" on failure
+5. If auto-cascade is enabled, unblocked dependent tasks with agentType start automatically
 
 ## Parameters
 
 - **task_ids**: Array of task IDs to execute
 - **additional_context**: Extra context appended to each agent's prompt
 - **model**: Model override for agents (e.g., "sonnet", "haiku")
-- **max_turns**: Maximum turns per agent`,
+- **max_turns**: Maximum turns per agent
+- **token_budget**: Approximate token budget per agent (best-effort tracking)
+- **timeout_ms**: Maximum wall-clock time in milliseconds per agent`,
     parameters: Type.Object({
       task_ids: Type.Array(Type.String(), { description: "Task IDs to execute as subagents" }),
       additional_context: Type.Optional(Type.String({ description: "Extra context for agent prompts" })),
       model: Type.Optional(Type.String({ description: "Model override for agents" })),
       max_turns: Type.Optional(Type.Number({ description: "Max turns per agent", minimum: 1 })),
+      token_budget: Type.Optional(Type.Number({ description: "Approximate token budget per agent (best-effort)", minimum: 1 })),
+      timeout_ms: Type.Optional(Type.Number({ description: "Max wall-clock time in ms per agent", minimum: 1000 })),
     }),
 
     async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
@@ -771,10 +947,10 @@ Set up task dependencies:
           continue;
         }
 
-        // Check all blockers are completed
+        // Check all blockers are resolved (completed or skipped) — missing blocker = unresolved
         const openBlockers = task.blockedBy.filter(bid => {
           const blocker = store.get(bid);
-          return !blocker || blocker.status !== "completed";
+          return !blocker || !isTerminalStatus(blocker.status);
         });
         if (openBlockers.length > 0) {
           results.push(`#${taskId}: blocked by ${openBlockers.map(id => "#" + id).join(", ")}`);
@@ -798,6 +974,36 @@ Set up task dependencies:
             model: params.model,
             maxTurns: params.max_turns,
           });
+
+          // Set up budget/timeout tracking
+          if (params.token_budget || params.timeout_ms) {
+            const budget: TaskBudget = {
+              startedAt: Date.now(),
+              tokenBudget: params.token_budget,
+              tokensUsed: 0,
+              timeoutMs: params.timeout_ms,
+            };
+            if (params.timeout_ms) {
+              budget.timer = setTimeout(() => {
+                // Auto-complete on timeout
+                store.update(taskId, {
+                  status: "completed",
+                  metadata: { ...store.get(taskId)?.metadata, timedOut: true },
+                });
+                widget.setActiveTask(taskId, false);
+                clearTaskBudget(taskId);
+                widget.update();
+              }, params.timeout_ms);
+            }
+            taskBudgets.set(taskId, budget);
+            widget.setBudget(taskId, {
+              tokenBudget: params.token_budget,
+              tokensUsed: 0,
+              startedAt: budget.startedAt,
+              timeoutMs: params.timeout_ms,
+            });
+          }
+
           launched.push(`#${taskId} → agent ${agentId}`);
         } catch (err: any) {
           store.update(taskId, { status: "pending" });
@@ -828,13 +1034,13 @@ Set up task dependencies:
       const mainMenu = async (): Promise<void> => {
         const tasks = store.list();
         const taskCount = tasks.length;
-        const completedCount = tasks.filter(t => t.status === "completed").length;
+        const terminalCount = tasks.filter(t => t.status === "completed" || t.status === "skipped").length;
 
         const choices: string[] = [
           `View all tasks (${taskCount})`,
           "Create task",
         ];
-        if (completedCount > 0) choices.push(`Clear completed (${completedCount})`);
+        if (terminalCount > 0) choices.push(`Clear completed (${terminalCount})`);
         if (taskCount > 0) choices.push(`Clear all (${taskCount})`);
         choices.push("Settings");
 
@@ -871,6 +1077,7 @@ Set up task dependencies:
           switch (status) {
             case "completed": return "✔";
             case "in_progress": return "◼";
+            case "skipped": return "⊘";
             default: return "◻";
           }
         };
@@ -901,6 +1108,9 @@ Set up task dependencies:
         if (task.status === "in_progress") {
           actions.push("✓ Complete");
         }
+        if (task.status === "pending" || task.status === "in_progress") {
+          actions.push("⊘ Skip");
+        }
         actions.push("✗ Delete");
         actions.push("← Back");
 
@@ -914,6 +1124,11 @@ Set up task dependencies:
           return viewTasks();
         } else if (action === "✓ Complete") {
           store.update(taskId, { status: "completed" });
+          widget.setActiveTask(taskId, false);
+          widget.update();
+          return viewTasks();
+        } else if (action === "⊘ Skip") {
+          store.update(taskId, { status: "skipped" });
           widget.setActiveTask(taskId, false);
           widget.update();
           return viewTasks();
@@ -951,6 +1166,8 @@ Set up task dependencies:
       eventUnsubs.length = 0;
       for (const cleanup of activeSpawnCleanups) cleanup();
       activeSpawnCleanups.clear();
+      for (const [taskId] of taskBudgets) clearTaskBudget(taskId);
+      taskBudgets.clear();
       unsubPing();
       unsubReady();
       widget.dispose();

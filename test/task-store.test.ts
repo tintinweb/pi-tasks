@@ -189,7 +189,7 @@ describe("TaskStore (in-memory)", () => {
 
     expect(store.get("1")!.blocks).toContain("2");
     expect(store.get("2")!.blocks).toContain("1");
-    expect(warnings).toContain("cycle: #2 and #1 block each other");
+    expect(warnings).toContain("cycle: #2 → #1 creates a dependency cycle");
   });
 
   it("allows self-dependency with warning", () => {
@@ -282,7 +282,7 @@ describe("TaskStore (in-memory)", () => {
     store.create("B", "Desc");
     store.update("1", { addBlocks: ["2"] });
     const { warnings } = store.update("1", { addBlockedBy: ["2"] });
-    expect(warnings).toContain("cycle: #1 and #2 block each other");
+    expect(warnings).toContain("cycle: #1 ← #2 creates a dependency cycle");
   });
 
   it("clearCompleted returns 0 when no completed tasks", () => {
@@ -311,6 +311,63 @@ describe("TaskStore (in-memory)", () => {
 
     expect(sorted.map(t => t.id)).toEqual(["1", "4", "3", "2"]);
     expect(sorted.map(t => t.status)).toEqual(["pending", "pending", "in_progress", "completed"]);
+  });
+  // ── New tests: skipped status ──
+
+  it("supports skipped status", () => {
+    store.create("Skippable", "Desc");
+    store.update("1", { status: "skipped" });
+    expect(store.get("1")!.status).toBe("skipped");
+  });
+
+  it("lists skipped tasks", () => {
+    store.create("Pending", "Desc");
+    store.create("Skipped", "Desc");
+    store.update("2", { status: "skipped" });
+    const tasks = store.list();
+    expect(tasks).toHaveLength(2);
+    expect(tasks.find(t => t.id === "2")!.status).toBe("skipped");
+  });
+
+  it("clearCompleted removes skipped tasks", () => {
+    store.create("Completed", "Desc");
+    store.create("Skipped", "Desc");
+    store.create("Pending", "Desc");
+    store.update("1", { status: "completed" });
+    store.update("2", { status: "skipped" });
+    const count = store.clearCompleted();
+    expect(count).toBe(2);
+    expect(store.list()).toHaveLength(1);
+    expect(store.list()[0].id).toBe("3");
+  });
+
+  // ── New tests: transitive cycle detection ──
+
+  it("detects transitive cycle: A→B→C + C→A warns", () => {
+    store.create("A", "Desc");
+    store.create("B", "Desc");
+    store.create("C", "Desc");
+    store.update("1", { addBlocks: ["2"] }); // A blocks B
+    store.update("2", { addBlocks: ["3"] }); // B blocks C
+    const { warnings } = store.update("3", { addBlocks: ["1"] }); // C blocks A → cycle!
+    expect(warnings.some(w => w.includes("cycle"))).toBe(true);
+  });
+
+  it("no warning for non-cyclic transitive deps", () => {
+    store.create("A", "Desc");
+    store.create("B", "Desc");
+    store.create("C", "Desc");
+    store.update("1", { addBlocks: ["2"] });
+    const { warnings } = store.update("2", { addBlocks: ["3"] });
+    expect(warnings).toEqual([]);
+  });
+
+  // ── New test: status in create ──
+
+  it("creates task with in_progress status via options", () => {
+    const t = store.create("Urgent", "Desc", undefined, undefined, { status: "in_progress" });
+    expect(t.status).toBe("in_progress");
+    expect(store.get("1")!.status).toBe("in_progress");
   });
 });
 

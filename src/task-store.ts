@@ -106,6 +106,24 @@ export class TaskStore {
     }
   }
 
+  /** DFS cycle detection: returns true if adding an edge fromId→toId would create a cycle via `blocks` edges. */
+  private hasCycle(fromId: string, toId: string): boolean {
+    // Would the edge toId.blockedBy include fromId? Check if fromId is reachable from toId via blocks edges.
+    const visited = new Set<string>();
+    const stack = [toId];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (current === fromId) return true;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      const task = this.tasks.get(current);
+      if (task) {
+        for (const dep of task.blocks) stack.push(dep);
+      }
+    }
+    return false;
+  }
+
   /** Execute a mutation with file locking (if file-backed). */
   private withLock<T>(fn: () => T): T {
     if (!this.lockPath) return fn();
@@ -120,14 +138,14 @@ export class TaskStore {
     }
   }
 
-  create(subject: string, description: string, activeForm?: string, metadata?: Record<string, any>): Task {
+  create(subject: string, description: string, activeForm?: string, metadata?: Record<string, any>, options?: { status?: TaskStatus }): Task {
     return this.withLock(() => {
       const now = Date.now();
       const task: Task = {
         id: String(this.nextId++),
         subject,
         description,
-        status: "pending",
+        status: options?.status ?? "pending",
         activeForm,
         owner: undefined,
         metadata: metadata ?? {},
@@ -229,8 +247,8 @@ export class TaskStore {
             warnings.push(`#${id} blocks itself`);
           } else if (!target) {
             warnings.push(`#${targetId} does not exist`);
-          } else if (target.blocks.includes(id)) {
-            warnings.push(`cycle: #${id} and #${targetId} block each other`);
+          } else if (this.hasCycle(id, targetId)) {
+            warnings.push(`cycle: #${id} → #${targetId} creates a dependency cycle`);
           }
         }
         changedFields.push("blocks");
@@ -251,8 +269,8 @@ export class TaskStore {
             warnings.push(`#${id} blocks itself`);
           } else if (!target) {
             warnings.push(`#${targetId} does not exist`);
-          } else if (task.blocks.includes(targetId)) {
-            warnings.push(`cycle: #${id} and #${targetId} block each other`);
+          } else if (this.hasCycle(targetId, id)) {
+            warnings.push(`cycle: #${id} ← #${targetId} creates a dependency cycle`);
           }
         }
         changedFields.push("blockedBy");
@@ -293,23 +311,23 @@ export class TaskStore {
     return true;
   }
 
-  /** Remove all completed tasks (single-pass). */
+  /** Remove all completed and skipped tasks (single-pass). */
   clearCompleted(): number {
     return this.withLock(() => {
-      // Collect completed IDs first
-      const completedIds = new Set<string>();
+      // Collect completed/skipped IDs first
+      const terminalIds = new Set<string>();
       for (const [id, task] of this.tasks) {
-        if (task.status === "completed") completedIds.add(id);
+        if (task.status === "completed" || task.status === "skipped") terminalIds.add(id);
       }
-      if (completedIds.size === 0) return 0;
+      if (terminalIds.size === 0) return 0;
 
-      // Delete completed and clean edges on remaining tasks in one pass
-      for (const id of completedIds) this.tasks.delete(id);
+      // Delete terminal and clean edges on remaining tasks in one pass
+      for (const id of terminalIds) this.tasks.delete(id);
       for (const t of this.tasks.values()) {
-        t.blocks = t.blocks.filter(bid => !completedIds.has(bid));
-        t.blockedBy = t.blockedBy.filter(bid => !completedIds.has(bid));
+        t.blocks = t.blocks.filter(bid => !terminalIds.has(bid));
+        t.blockedBy = t.blockedBy.filter(bid => !terminalIds.has(bid));
       }
-      return completedIds.size;
+      return terminalIds.size;
     });
   }
 }
