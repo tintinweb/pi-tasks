@@ -7,7 +7,7 @@ export interface TasksConfig {
   taskScope?: "memory" | "session" | "project";  // default: "session"
   autoCascade?: boolean;   // default: false
   nudgeInterval?: number;  // default: 4 (0 = disabled)
-  autoClearCompleted?: boolean;  // default: false
+  autoClearCompleted?: boolean;  // default: true
 }
 
 const CONFIG_PATH = join(process.cwd(), ".pi", "tasks-config.json");

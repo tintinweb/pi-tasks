@@ -611,7 +611,7 @@ To run a task as a subagent: (1) create the task with \`agentType\` set (e.g., "
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const shouldClear = params.clearCompleted ?? (cfg.autoClearCompleted ?? false);
+      const shouldClear = params.clearCompleted ?? (cfg.autoClearCompleted ?? true);
       if (shouldClear) store.clearCompleted();
 
       const { task, warnings } = createSingleTask(params);
@@ -660,7 +660,7 @@ Use TaskList first to determine the next available ID if needed.`,
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const shouldClear = params.clearCompleted ?? (cfg.autoClearCompleted ?? false);
+      const shouldClear = params.clearCompleted ?? (cfg.autoClearCompleted ?? true);
       if (shouldClear) store.clearCompleted();
 
       const createdTasks: Array<{ id: string; subject: string }> = [];
