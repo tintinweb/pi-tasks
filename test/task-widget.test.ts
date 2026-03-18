@@ -409,3 +409,235 @@ describe("formatDuration (via widget rendering)", () => {
     expect(lines[1]).toContain("↓ 4.1k");  // 4100 → "4.1k"
   });
 });
+
+describe("Skipped status rendering", () => {
+  let store: TaskStore;
+  let widget: TaskWidget;
+  let ui: ReturnType<typeof mockUICtx>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new TaskStore();
+    widget = new TaskWidget(store);
+    ui = mockUICtx();
+    widget.setUICtx(ui.ctx);
+  });
+
+  afterEach(() => {
+    widget.dispose();
+    vi.useRealTimers();
+  });
+
+  it("renders skipped tasks with ⊘ icon", () => {
+    store.create("Skipped task", "Desc");
+    store.update("1", { status: "skipped" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("⊘");
+    expect(lines[1]).toContain("Skipped task");
+  });
+
+  it("renders skipped tasks with dim text (no strikethrough)", () => {
+    store.create("Skipped task", "Desc");
+    store.update("1", { status: "skipped" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // Should not have strikethrough markers
+    expect(lines[1]).not.toContain("~~");
+  });
+
+  it("includes skipped count in header summary", () => {
+    store.create("Done", "Desc");
+    store.create("Skipped", "Desc");
+    store.create("Open", "Desc");
+    store.update("1", { status: "completed" });
+    store.update("2", { status: "skipped" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[0]).toContain("1 skipped");
+    expect(lines[0]).toContain("1 done");
+    expect(lines[0]).toContain("1 open");
+  });
+
+  it("hides skipped blockers in blocked-by suffix", () => {
+    store.create("Skipped blocker", "Desc");
+    store.create("Blocked task", "Desc");
+    store.update("2", { addBlockedBy: ["1"] });
+    store.update("1", { status: "skipped" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    const blockedLine = lines.find(l => l.includes("Blocked task"));
+    expect(blockedLine).not.toContain("blocked by");
+  });
+});
+
+describe("Collapse completed tasks", () => {
+  let store: TaskStore;
+  let widget: TaskWidget;
+  let ui: ReturnType<typeof mockUICtx>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new TaskStore();
+    widget = new TaskWidget(store);
+    ui = mockUICtx();
+    widget.setUICtx(ui.ctx);
+  });
+
+  afterEach(() => {
+    widget.dispose();
+    vi.useRealTimers();
+  });
+
+  it("collapses terminal tasks when 3+ active tasks exist", () => {
+    // 3 active tasks + 2 completed
+    store.create("Active 1", "Desc");
+    store.create("Active 2", "Desc");
+    store.create("Active 3", "Desc");
+    store.create("Done 1", "Desc");
+    store.create("Done 2", "Desc");
+    store.update("4", { status: "completed" });
+    store.update("5", { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // Should NOT show individual completed tasks
+    const doneLines = lines.filter(l => l.includes("Done 1") || l.includes("Done 2"));
+    expect(doneLines).toHaveLength(0);
+    // Should show collapsed summary
+    expect(lines.some(l => l.includes("2 completed"))).toBe(true);
+  });
+
+  it("shows terminal tasks individually when <3 active tasks", () => {
+    // 2 active + 2 completed — not enough active to trigger collapse
+    store.create("Active 1", "Desc");
+    store.create("Active 2", "Desc");
+    store.create("Done 1", "Desc");
+    store.create("Done 2", "Desc");
+    store.update("3", { status: "completed" });
+    store.update("4", { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // Should show individual completed tasks
+    expect(lines.some(l => l.includes("Done 1"))).toBe(true);
+    expect(lines.some(l => l.includes("Done 2"))).toBe(true);
+  });
+
+  it("shows 'and N more' when 12+ active tasks with collapse", () => {
+    // 12 active + 2 completed → collapse triggers, 10 visible active, "2 more" shown
+    for (let i = 1; i <= 12; i++) {
+      store.create(`Active ${i}`, "Desc");
+    }
+    store.create("Done 1", "Desc");
+    store.create("Done 2", "Desc");
+    store.update("13", { status: "completed" });
+    store.update("14", { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // Should have: header + 10 active tasks + "and 2 more" + collapsed summary
+    expect(lines.some(l => l.includes("2 more"))).toBe(true);
+    // Completed tasks should be collapsed (not shown individually)
+    expect(lines.some(l => l.includes("Done 1"))).toBe(false);
+    expect(lines.some(l => l.includes("Done 2"))).toBe(false);
+    expect(lines.some(l => l.includes("2 completed"))).toBe(true);
+  });
+
+  it("includes skipped in collapsed summary", () => {
+    store.create("Active 1", "Desc");
+    store.create("Active 2", "Desc");
+    store.create("Active 3", "Desc");
+    store.create("Done", "Desc");
+    store.create("Skipped", "Desc");
+    store.update("4", { status: "completed" });
+    store.update("5", { status: "skipped" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines.some(l => l.includes("1 completed"))).toBe(true);
+    expect(lines.some(l => l.includes("1 skipped"))).toBe(true);
+  });
+});
+
+describe("Budget display", () => {
+  let store: TaskStore;
+  let widget: TaskWidget;
+  let ui: ReturnType<typeof mockUICtx>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new TaskStore();
+    widget = new TaskWidget(store);
+    ui = mockUICtx();
+    widget.setUICtx(ui.ctx);
+  });
+
+  afterEach(() => {
+    widget.dispose();
+    vi.useRealTimers();
+  });
+
+  it("shows remaining time for tasks with timeout", () => {
+    store.create("Timed task", "Desc", "Working");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+
+    const now = Date.now();
+    widget.setBudget("1", {
+      startedAt: now,
+      tokensUsed: 0,
+      timeoutMs: 180000, // 3 minutes
+    });
+
+    // Advance 1 minute
+    vi.advanceTimersByTime(60000);
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    const activeLine = lines.find(l => l.includes("Working…"));
+    expect(activeLine).toContain("⏱");
+    expect(activeLine).toContain("left");
+  });
+
+  it("shows budget percentage for tasks with token budget", () => {
+    store.create("Budget task", "Desc", "Processing");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+
+    widget.setBudget("1", {
+      startedAt: Date.now(),
+      tokenBudget: 10000,
+      tokensUsed: 7500,
+      timeoutMs: undefined,
+    });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    const activeLine = lines.find(l => l.includes("Processing…"));
+    expect(activeLine).toContain("75% budget");
+  });
+
+  it("clears budget display", () => {
+    store.create("Task", "Desc", "Working");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+
+    widget.setBudget("1", {
+      startedAt: Date.now(),
+      tokenBudget: 10000,
+      tokensUsed: 5000,
+    });
+
+    widget.clearBudget("1");
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    const activeLine = lines.find(l => l.includes("Working…"));
+    expect(activeLine).not.toContain("budget");
+  });
+});

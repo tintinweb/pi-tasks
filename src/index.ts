@@ -2,7 +2,7 @@
  * @tintinweb/pi-tasks — A pi extension providing Claude Code-style task tracking and coordination.
  *
  * Tools:
- *   TaskCreate   — Create a structured task
+ *   TaskCreate   — Create one or more structured tasks (single or batch mode)
  *   TaskList     — List all tasks with status
  *   TaskGet      — Get full task details
  *   TaskUpdate   — Update task fields, status, dependencies
@@ -20,14 +20,31 @@ import { TaskStore } from "./task-store.js";
 import { ProcessTracker } from "./process-tracker.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
 import { loadTasksConfig } from "./tasks-config.js";
+import { isTerminalStatus, type TaskBudget, type TaskStatus } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 
 // ---- Helpers ----
 
 function textResult(msg: string) {
-  return { content: [{ type: "text" as const, text: msg }], details: undefined as any };
+  return { content: [{ type: "text" as const, text: msg }], details: undefined };
+}
+
+/** Format a task as a multi-line detail string (reused by TaskCreate and TaskGet). */
+function formatTaskDetail(task: { id: string; subject: string; description: string; status: string; owner?: string; blockedBy: string[]; blocks: string[] }): string {
+  const lines: string[] = [
+    `Task #${task.id}: ${task.subject}`,
+    `Status: ${task.status}`,
+  ];
+  if (task.owner) lines.push(`Owner: ${task.owner}`);
+  const desc = task.description.replace(/\\n/g, "\n");
+  lines.push(`Description: ${desc}`);
+  if (task.blockedBy.length > 0) lines.push(`Blocked by: ${task.blockedBy.map(id => "#" + id).join(", ")}`);
+  if (task.blocks.length > 0) lines.push(`Blocks: ${task.blocks.map(id => "#" + id).join(", ")}`);
+  return lines.join("\n");
 }
 
 /** Task tool names — used to detect task tool usage for reminder suppression. */
@@ -41,6 +58,16 @@ The task tools haven't been used recently. If you're working on tasks that would
 </system-reminder>`;
 
 export default function (pi: ExtensionAPI) {
+  // ── Duplicate installation detection ──
+  try {
+    const gitInstallPath = join(homedir(), ".pi", "agent", "git", "pi-tasks");
+    const hasGitInstall = existsSync(gitInstallPath);
+    const isNpmGlobal = import.meta.url?.includes("node_modules");
+    if (hasGitInstall && isNpmGlobal) {
+      console.warn("[pi-tasks] Warning: detected both git (~/.pi/agent/git/pi-tasks) and npm global installations. This may cause conflicts — consider removing one.");
+    }
+  } catch { /* Non-fatal: detection is best-effort advisory */ }
+
   // Initialize store and config
   const cfg = loadTasksConfig();
   const piTasks = process.env.PI_TASKS;
@@ -69,10 +96,20 @@ export default function (pi: ExtensionAPI) {
   // ── Subagent integration state ──
   /** Latest ExtensionContext — refreshed on every tool execution so cascade always has a valid one. */
   let latestCtx: ExtensionContext | undefined;
-  /** Cascade config — set by TaskExecute, consumed by completion listener. */
-  let cascadeConfig: { additionalContext?: string; model?: string; maxTurns?: number } | undefined;
+  /** Per-task cascade config — set by TaskExecute, consumed by completion listener. */
+  const taskCascadeConfigs = new Map<string, { additionalContext?: string; model?: string; maxTurns?: number }>();
   /** Maps agent IDs to task IDs for O(1) completion lookup. */
   const agentTaskMap = new Map<string, string>();
+
+  // ── Task-level budget/timeout tracking ──
+  const taskBudgets = new Map<string, TaskBudget>();
+
+  function clearTaskBudget(taskId: string) {
+    const budget = taskBudgets.get(taskId);
+    if (budget?.timer) clearTimeout(budget.timer);
+    taskBudgets.delete(taskId);
+    widget.clearBudget(taskId);
+  }
 
   // ── Subagent extension presence detection ──
   // Two paths: (1) listen for ready broadcast (subagents loads first),
@@ -88,22 +125,49 @@ export default function (pi: ExtensionAPI) {
   pi.events.emit("subagents:rpc:ping", { requestId: pingId });
 
   // Also listen for ready broadcast (covers: subagents loads after us)
-  pi.events.on("subagents:ready", () => {
+  const unsubReady = pi.events.on("subagents:ready", () => {
     subagentsAvailable = true;
+    unsubReady();  // self-remove to prevent listener leak
     unsubPing();   // clean up ping listener if still pending
   });
 
   /** Spawn a subagent via pi.events RPC (requires @tintinweb/pi-subagents extension). */
-  function spawnSubagent(type: string, prompt: string, options?: any): Promise<string> {
+  function spawnSubagent(type: string, prompt: string, options?: any, signal?: AbortSignal): Promise<string> {
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { unsub(); reject(new Error("subagents:rpc:spawn timeout")); }, 30000);
+      let settled = false;
+      const timer = setTimeout(() => { cleanup(); reject(new Error("subagents:rpc:spawn timeout")); }, 30000);
       const unsub = pi.events.on(`subagents:rpc:spawn:reply:${requestId}`, (p: unknown) => {
+        if (settled) return;
         const { id, error } = p as { id?: string; error?: string };
-        unsub(); clearTimeout(timer);
+        cleanup();
         if (error) reject(new Error(error));
         else resolve(id!);
       });
+
+      function cleanup() {
+        if (settled) return;
+        settled = true;
+        unsub();
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        activeSpawnCleanups.delete(cleanup);
+      }
+
+      activeSpawnCleanups.add(cleanup);
+
+      function onAbort() {
+        cleanup();
+        reject(new DOMException("The operation was aborted", "AbortError"));
+      }
+
+      if (signal?.aborted) {
+        cleanup();
+        reject(new DOMException("The operation was aborted", "AbortError"));
+        return;
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+
       pi.events.emit("subagents:rpc:spawn", { requestId, type, prompt, options });
     });
   }
@@ -119,8 +183,13 @@ export default function (pi: ExtensionAPI) {
   // ── Subagent completion listener ──
   // Listens for subagent lifecycle events to update task status and optionally cascade.
 
+  // Collect event bus unsub handles for dispose()
+  const eventUnsubs: Array<() => void> = [];
+  // Track in-flight spawn RPC cleanup functions for dispose()
+  const activeSpawnCleanups = new Set<() => void>();
+
   // Success → mark task completed, cascade if enabled
-  pi.events.on("subagents:completed", async (data) => {
+  eventUnsubs.push(pi.events.on("subagents:completed", async (data) => {
     const { id, result } = data as { id: string; result?: string };
     const taskId = agentTaskMap.get(id);
     if (!taskId) return;
@@ -130,14 +199,17 @@ export default function (pi: ExtensionAPI) {
 
     store.update(task.id, { status: "completed", metadata: { ...task.metadata, result } });
     widget.setActiveTask(task.id, false);
+    clearTaskBudget(taskId);
 
     // Auto-cascade: find unblocked dependents with agentType
+    const cascadeConfig = taskCascadeConfigs.get(taskId);
+    taskCascadeConfigs.delete(taskId);
     if ((cfg.autoCascade ?? false) && cascadeConfig && latestCtx) {
       const unblocked = store.list().filter(t =>
         t.status === "pending" &&
         t.metadata?.agentType &&
         t.blockedBy.includes(task.id) &&
-        t.blockedBy.every(depId => store.get(depId)?.status === "completed")
+        t.blockedBy.every(depId => { const blocker = store.get(depId); return !blocker || isTerminalStatus(blocker.status); })
       );
       for (const next of unblocked) {
         store.update(next.id, { status: "in_progress" });
@@ -147,20 +219,23 @@ export default function (pi: ExtensionAPI) {
             description: next.subject,
             isBackground: true,
             maxTurns: cascadeConfig.maxTurns,
+            ...(cascadeConfig.model && { model: cascadeConfig.model }),
           });
           agentTaskMap.set(agentId, next.id);
           store.update(next.id, { owner: agentId, metadata: { ...next.metadata, agentId } });
           widget.setActiveTask(next.id);
+          // Propagate cascade config to dependent task
+          taskCascadeConfigs.set(next.id, cascadeConfig);
         } catch (err: any) {
           store.update(next.id, { status: "pending", metadata: { ...next.metadata, lastError: err.message } });
         }
       }
     }
     widget.update();
-  });
+  }));
 
   // Failure → store error, revert to pending, don't cascade (branch stops)
-  pi.events.on("subagents:failed", (data) => {
+  eventUnsubs.push(pi.events.on("subagents:failed", (data) => {
     const { id, error, status } = data as { id: string; error?: string; status: string };
     const taskId = agentTaskMap.get(id);
     if (!taskId) return;
@@ -172,8 +247,112 @@ export default function (pi: ExtensionAPI) {
       metadata: { ...task.metadata, lastError: error || status },
     });
     widget.setActiveTask(task.id, false);
+    clearTaskBudget(taskId);
+    taskCascadeConfigs.delete(taskId);
     widget.update();
-  });
+  }));
+
+  // ── Task RPC handlers ──
+  // Allow other extensions (e.g., plan-executor) to create/update tasks
+  // via the event bus, following the same request/reply pattern as
+  // subagents:rpc:*.
+
+  // Ping: presence detection
+  eventUnsubs.push(pi.events.on("tasks:rpc:ping", (payload: unknown) => {
+    const { requestId } = payload as { requestId: string };
+    pi.events.emit(`tasks:rpc:ping:reply:${requestId}`, {});
+  }));
+
+  // createMany: batch create tasks with optional deps
+  eventUnsubs.push(pi.events.on("tasks:rpc:createMany", (payload: unknown) => {
+    const p = payload as Record<string, unknown> | undefined;
+    if (!p || typeof p.requestId !== "string" || !Array.isArray(p.tasks)) return;
+    const requestId = p.requestId;
+    const taskDefs = p.tasks as Array<{
+      subject: string;
+      description: string;
+      activeForm?: string;
+      metadata?: Record<string, any>;
+      status?: TaskStatus;
+      blockedBy?: string[];
+      blocks?: string[];
+    }>;
+    const clear = p.clearCompleted === true;
+
+    const created: Array<{ id: string; blockedBy?: string[]; blocks?: string[] }> = [];
+    try {
+      if (clear) store.clearCompleted();
+
+      // Create all tasks first, collecting IDs
+      for (const def of taskDefs) {
+        const task = store.create(
+          def.subject,
+          def.description,
+          def.activeForm,
+          def.metadata,
+          def.status ? { status: def.status } : undefined,
+        );
+        created.push({ id: task.id, blockedBy: def.blockedBy, blocks: def.blocks });
+      }
+
+      // Wire dependencies (IDs in blockedBy/blocks may reference
+      // tasks created in this batch, so we do it after all creates)
+      const rpcWarnings: string[] = [];
+      for (const c of created) {
+        if (c.blockedBy?.length || c.blocks?.length) {
+          const result = store.update(c.id, {
+            ...(c.blockedBy?.length ? { addBlockedBy: c.blockedBy } : {}),
+            ...(c.blocks?.length ? { addBlocks: c.blocks } : {}),
+          });
+          rpcWarnings.push(...result.warnings);
+        }
+      }
+
+      widget.update();
+      pi.events.emit(`tasks:rpc:createMany:reply:${requestId}`, {
+        ids: created.map(c => c.id),
+        ...(rpcWarnings.length > 0 && { warnings: rpcWarnings }),
+      });
+    } catch (err: any) {
+      pi.events.emit(`tasks:rpc:createMany:reply:${requestId}`, {
+        error: err.message,
+        // Partial: tasks created before the error are already persisted
+        partialIds: created.map(c => c.id),
+      });
+    }
+  }));
+
+  // update: update a single task
+  eventUnsubs.push(pi.events.on("tasks:rpc:update", (payload: unknown) => {
+    const p = payload as Record<string, unknown> | undefined;
+    if (!p || typeof p.requestId !== "string" || typeof p.taskId !== "string") return;
+    const requestId = p.requestId;
+    const taskId = p.taskId;
+    const fields = (p.fields ?? {}) as {
+      status?: TaskStatus | "deleted";
+      subject?: string;
+      description?: string;
+      activeForm?: string;
+      owner?: string;
+      metadata?: Record<string, any>;
+    };
+
+    try {
+      const result = store.update(taskId, fields);
+      widget.update();
+      pi.events.emit(`tasks:rpc:update:reply:${requestId}`, {
+        success: !!result.task,
+      });
+    } catch (err: any) {
+      pi.events.emit(`tasks:rpc:update:reply:${requestId}`, {
+        error: err.message,
+      });
+    }
+  }));
+
+  // Broadcast availability AFTER all RPC handlers are registered,
+  // so consumers that react to tasks:ready can immediately call any RPC.
+  pi.events.emit("tasks:ready", {});
 
   // ── Session-scoped store upgrade ──
   // For session scope, the store starts in-memory (no session ID at init time).
@@ -192,6 +371,9 @@ export default function (pi: ExtensionAPI) {
     storeUpgraded = true;
   }
 
+  /** One-time orphan reminder built at resume, consumed+cleared by tool_result handler. */
+  let pendingOrphanReminder: string | undefined;
+
   /** Restore widget on session start/resume if there's unfinished work.
    *  On new sessions, auto-clear if all tasks are completed (clean slate).
    *  On resume, always show tasks (user may want to review).
@@ -201,11 +383,18 @@ export default function (pi: ExtensionAPI) {
     persistedTasksShown = true;
     const tasks = store.list();
     if (tasks.length > 0) {
-      if (!isResume && tasks.every(t => t.status === "completed")) {
+      if (!isResume && tasks.every(t => isTerminalStatus(t.status))) {
         store.clearCompleted();
         if (taskScope === "session") store.deleteFileIfEmpty();
       } else {
         widget.update();
+        // Build one-time orphan reminder for in_progress tasks on resume
+        if (isResume) {
+          const orphanIds = tasks.filter(t => t.status === "in_progress").map(t => `#${t.id}`);
+          if (orphanIds.length > 0) {
+            pendingOrphanReminder = `<system-reminder>Session resumed. The following tasks were in_progress and may need attention (their agents are no longer running): ${orphanIds.join(", ")}. Consider completing, skipping, or restarting them.</system-reminder>`;
+          }
+        }
       }
     }
   }
@@ -227,7 +416,20 @@ export default function (pi: ExtensionAPI) {
   pi.on("turn_end", async (event) => {
     const msg = event.message as any;
     if (msg?.role === "assistant" && msg.usage) {
+      const totalTokens = (msg.usage.input ?? 0) + (msg.usage.output ?? 0);
       widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0);
+
+      // Best-effort token budget tracking for active tasks
+      for (const [taskId, budget] of taskBudgets) {
+        if (!budget.tokenBudget) continue;
+        budget.tokensUsed += totalTokens;
+        widget.setBudget(taskId, {
+          tokenBudget: budget.tokenBudget,
+          tokensUsed: budget.tokensUsed,
+          startedAt: budget.startedAt,
+          timeoutMs: budget.timeoutMs,
+        });
+      }
     }
   });
 
@@ -235,6 +437,15 @@ export default function (pi: ExtensionAPI) {
   // Appends a <system-reminder> nudge to non-task tool results when tasks exist
   // but task tools haven't been used recently (mimics Claude Code's behavior).
   pi.on("tool_result", async (event) => {
+    // One-time orphaned task notification on resume
+    if (pendingOrphanReminder) {
+      const reminder = pendingOrphanReminder;
+      pendingOrphanReminder = undefined;
+      return {
+        content: [...event.content, { type: "text" as const, text: reminder }],
+      };
+    }
+
     // Task tool usage resets the reminder timer
     if (TASK_TOOL_NAMES.has(event.toolName)) {
       lastTaskToolUseTurn = currentTurn;
@@ -243,11 +454,16 @@ export default function (pi: ExtensionAPI) {
     }
 
     // Cheap checks first — avoid store.list() disk I/O when possible
-    if (currentTurn - lastTaskToolUseTurn < REMINDER_INTERVAL) return {};
+    const nudgeInterval = cfg.nudgeInterval ?? REMINDER_INTERVAL;
+    if (nudgeInterval === 0) return {}; // nudges disabled
+    if (currentTurn - lastTaskToolUseTurn < nudgeInterval) return {};
     if (reminderInjectedThisCycle) return {};
 
     const tasks = store.list();
     if (tasks.length === 0) return {};
+
+    // Suppress nudges when any task is actively being worked on
+    if (tasks.some(t => t.status === "in_progress")) return {};
 
     // Append system-reminder to tool result content.
     // Reset the baseline so the next reminder fires REMINDER_INTERVAL turns later.
@@ -268,6 +484,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   // session_switch fires on resume (reason: "resume") — reload persisted tasks.
+  // Cast: session_switch is a de-facto pi lifecycle event not yet in the public types.
+  // TODO: remove cast once pi SDK exports session_switch in ExtensionAPI.on() overloads.
   pi.on("session_switch" as any, async (event: any, ctx: ExtensionContext) => {
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
@@ -283,9 +501,54 @@ export default function (pi: ExtensionAPI) {
     widget.update();
   });
 
+  /** Shared logic for creating a single task (used by TaskCreate in both single and batch modes).
+   *  Returns the created task and any dependency warnings (dangling refs, cycles). */
+  function createSingleTask(params: {
+    subject: string; description: string; activeForm?: string; agentType?: string;
+    metadata?: Record<string, any>; blockedBy?: string[]; blocks?: string[];
+    status?: "pending" | "in_progress";
+  }): { task: ReturnType<typeof store.create>; warnings: string[] } {
+    const meta = params.metadata ?? {};
+    if (params.agentType) meta.agentType = params.agentType;
+    const task = store.create(
+      params.subject, params.description, params.activeForm,
+      Object.keys(meta).length > 0 ? meta : undefined,
+      params.status ? { status: params.status } : undefined,
+    );
+
+    // Wire dependencies if provided
+    let warnings: string[] = [];
+    const depFields: { addBlocks?: string[]; addBlockedBy?: string[] } = {};
+    if (params.blocks?.length) depFields.addBlocks = params.blocks;
+    if (params.blockedBy?.length) depFields.addBlockedBy = params.blockedBy;
+    if (depFields.addBlocks || depFields.addBlockedBy) {
+      const result = store.update(task.id, depFields);
+      warnings = result.warnings;
+    }
+
+    if (params.status === "in_progress") {
+      widget.setActiveTask(task.id);
+    }
+    return { task, warnings };
+  }
+
   // ──────────────────────────────────────────────────
   // Tool 1: TaskCreate
   // ──────────────────────────────────────────────────
+
+  const taskItemSchema = Type.Object({
+    subject: Type.String({ description: "A brief title for the task" }),
+    description: Type.String({ description: "A detailed description of what needs to be done" }),
+    activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
+    agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
+    blockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task (sets up dependencies at creation)" })),
+    blocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks (sets up dependencies at creation)" })),
+    status: Type.Optional(Type.Unsafe<"pending" | "in_progress">({
+      type: "string", enum: ["pending", "in_progress"],
+      description: "Initial status — use 'in_progress' to start working immediately",
+    })),
+  });
 
   pi.registerTool({
     name: "TaskCreate",
@@ -324,32 +587,88 @@ NOTE that you should not use this tool if there is only one trivial task to do. 
 
 All tasks are created with status \`pending\`.
 
+## Batch Mode
+
+To create multiple tasks in one call, pass a \`tasks\` array instead of individual fields.
+Tasks are created in array order with sequential IDs. Use the expected IDs in blockedBy/blocks
+to wire dependencies within the same batch.
+
 ## Tips
 
 - Create tasks with clear, specific subjects that describe the outcome
 - Include enough detail in the description for another agent to understand and complete the task
 - After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
 - Check TaskList first to avoid creating duplicate tasks
-- Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute`,
+- Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute
+
+## Subagent Execution
+
+To run a task as a subagent: (1) create the task with \`agentType\` set (e.g., "general-purpose"), then (2) call TaskExecute with the task ID. The agent receives the task description as its prompt and runs in the background. Monitor progress with TaskGet/TaskList.
+
+## Advanced Parameters
+
+- **blockedBy** / **blocks**: Set up dependencies at creation time (avoids a separate TaskUpdate call)
+- **status**: Create a task as \`in_progress\` to start working on it immediately (avoids a separate TaskUpdate call)
+- **clearCompleted**: Set to true to clear completed/skipped tasks before creating this one`,
     promptGuidelines: [
       "When working on complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status.",
       "Mark tasks as in_progress before starting work and completed when done.",
       "Use TaskList to check for available work after completing a task.",
     ],
     parameters: Type.Object({
-      subject: Type.String({ description: "A brief title for the task" }),
-      description: Type.String({ description: "A detailed description of what needs to be done" }),
+      // Single-task fields (used when tasks array is not provided)
+      subject: Type.Optional(Type.String({ description: "A brief title for the task" })),
+      description: Type.Optional(Type.String({ description: "A detailed description of what needs to be done" })),
       activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
       agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
       metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
+      blockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task (sets up dependencies at creation)" })),
+      blocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks (sets up dependencies at creation)" })),
+      status: Type.Optional(Type.Unsafe<"pending" | "in_progress">({
+        type: "string", enum: ["pending", "in_progress"],
+        description: "Initial status — use 'in_progress' to start working immediately",
+      })),
+      clearCompleted: Type.Optional(Type.Boolean({ description: "Clear completed/skipped tasks before creating this one" })),
+      // Batch mode: array of tasks (overrides single-task fields)
+      tasks: Type.Optional(Type.Array(taskItemSchema, { description: "Array of tasks to create in batch (overrides single-task fields)" })),
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const meta = params.metadata ?? {};
-      if (params.agentType) meta.agentType = params.agentType;
-      const task = store.create(params.subject, params.description, params.activeForm, Object.keys(meta).length > 0 ? meta : undefined);
+      const shouldClear = params.clearCompleted ?? (cfg.autoClearCompleted ?? true);
+      if (shouldClear) store.clearCompleted();
+
+      // Batch mode: tasks array provided
+      if (params.tasks) {
+        if (params.tasks.length === 0) {
+          return Promise.resolve(textResult("Created 0 task(s)."));
+        }
+        const createdTasks: Array<{ id: string; subject: string }> = [];
+        const allWarnings: string[] = [];
+
+        for (const t of params.tasks) {
+          const { task, warnings } = createSingleTask(t);
+          createdTasks.push({ id: task.id, subject: task.subject });
+          allWarnings.push(...warnings);
+        }
+
+        widget.update();
+
+        const lines = createdTasks.map(t => `#${t.id}: ${t.subject}`);
+        let text = `Created ${createdTasks.length} task(s):\n${lines.join("\n")}`;
+        if (allWarnings.length > 0) text += `\nWarnings: ${allWarnings.join("; ")}`;
+        return Promise.resolve(textResult(text));
+      }
+
+      // Single mode: subject + description required
+      if (!params.subject || !params.description) {
+        return Promise.resolve(textResult("Error: subject and description are required (or provide a tasks array for batch mode)"));
+      }
+
+      const { task, warnings } = createSingleTask(params as Parameters<typeof createSingleTask>[0]);
       widget.update();
-      return Promise.resolve(textResult(`Task #${task.id} created successfully: ${task.subject}`));
+      let text = formatTaskDetail(store.get(task.id) ?? task);
+      if (warnings.length > 0) text += `\nWarnings: ${warnings.join("; ")}`;
+      return Promise.resolve(textResult(text));
     },
   });
 
@@ -386,8 +705,8 @@ Use TaskGet with a specific task ID to view full details including description a
       const tasks = store.list();
       if (tasks.length === 0) return Promise.resolve(textResult("No tasks found"));
 
-      // Sort: pending first (by ID), then in_progress (by ID), then completed (by ID)
-      const statusOrder: Record<string, number> = { pending: 0, in_progress: 1, completed: 2 };
+      // Sort: pending first (by ID), then in_progress (by ID), then completed/skipped (by ID)
+      const statusOrder: Record<string, number> = { pending: 0, in_progress: 1, completed: 2, skipped: 3 };
       const sorted = [...tasks].sort((a, b) => {
         const so = (statusOrder[a.status] ?? 0) - (statusOrder[b.status] ?? 0);
         if (so !== 0) return so;
@@ -401,11 +720,11 @@ Use TaskGet with a specific task ID to view full details including description a
           line += ` (${task.owner})`;
         }
 
-        // Only show non-completed blockers
+        // Only show non-resolved blockers
         if (task.blockedBy.length > 0) {
           const openBlockers = task.blockedBy.filter(bid => {
             const blocker = store.get(bid);
-            return blocker && blocker.status !== "completed";
+            return blocker && !isTerminalStatus(blocker.status);
           });
           if (openBlockers.length > 0) {
             line += ` [blocked by ${openBlockers.map(id => "#" + id).join(", ")}]`;
@@ -454,27 +773,7 @@ Returns full task details:
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const task = store.get(params.taskId);
       if (!task) return Promise.resolve(textResult(`Task not found`));
-
-      // Unescape literal \n sequences the LLM may have double-escaped in JSON
-      const desc = task.description.replace(/\\n/g, "\n");
-
-      const lines: string[] = [
-        `Task #${task.id}: ${task.subject}`,
-        `Status: ${task.status}`,
-      ];
-      if (task.owner) {
-        lines.push(`Owner: ${task.owner}`);
-      }
-      lines.push(`Description: ${desc}`);
-
-      if (task.blockedBy.length > 0) {
-        lines.push(`Blocked by: ${task.blockedBy.map(id => "#" + id).join(", ")}`);
-      }
-      if (task.blocks.length > 0) {
-        lines.push(`Blocks: ${task.blocks.map(id => "#" + id).join(", ")}`);
-      }
-
-      return Promise.resolve(textResult(lines.join("\n")));
+      return Promise.resolve(textResult(formatTaskDetail(task)));
     },
   });
 
@@ -565,9 +864,9 @@ Set up task dependencies:
 \`\`\``,
     parameters: Type.Object({
       taskId: Type.String({ description: "The ID of the task to update" }),
-      status: Type.Optional(Type.Unsafe<"pending" | "in_progress" | "completed" | "deleted">({
+      status: Type.Optional(Type.Unsafe<"pending" | "in_progress" | "completed" | "skipped" | "deleted">({
         anyOf: [
-          { type: "string", enum: ["pending", "in_progress", "completed"] },
+          { type: "string", enum: ["pending", "in_progress", "completed", "skipped"] },
           { type: "string", const: "deleted" },
         ],
         description: "New status for the task",
@@ -592,7 +891,7 @@ Set up task dependencies:
       // Update widget active task tracking
       if (fields.status === "in_progress") {
         widget.setActiveTask(taskId);
-      } else if (fields.status === "completed" || fields.status === "deleted") {
+      } else if ((fields.status && isTerminalStatus(fields.status)) || fields.status === "deleted") {
         widget.setActiveTask(taskId, false);
       }
 
@@ -693,23 +992,35 @@ Set up task dependencies:
 ## When to Use This Tool
 
 - To start execution of tasks that have \`agentType\` set (created via TaskCreate with agentType parameter)
-- Tasks must be \`pending\` with all blockedBy dependencies \`completed\`
+- Tasks must be \`pending\` with all blockedBy dependencies resolved (\`completed\` or \`skipped\`)
 - Each task runs as an independent background subagent
+
+## Workflow
+
+1. Create tasks with \`agentType\` set via TaskCreate (e.g., agentType: "general-purpose")
+2. Set up any dependencies via TaskCreate's blockedBy/blocks params or TaskUpdate
+3. Call TaskExecute with the task IDs to launch them as background agents
+4. Monitor progress with TaskGet/TaskList — status updates to "completed" or reverts to "pending" on failure
+5. If auto-cascade is enabled, unblocked dependent tasks with agentType start automatically
 
 ## Parameters
 
 - **task_ids**: Array of task IDs to execute
 - **additional_context**: Extra context appended to each agent's prompt
 - **model**: Model override for agents (e.g., "sonnet", "haiku")
-- **max_turns**: Maximum turns per agent`,
+- **max_turns**: Maximum turns per agent
+- **token_budget**: Approximate token budget per agent (best-effort tracking)
+- **timeout_ms**: Maximum wall-clock time in milliseconds per agent`,
     parameters: Type.Object({
       task_ids: Type.Array(Type.String(), { description: "Task IDs to execute as subagents" }),
       additional_context: Type.Optional(Type.String({ description: "Extra context for agent prompts" })),
       model: Type.Optional(Type.String({ description: "Model override for agents" })),
       max_turns: Type.Optional(Type.Number({ description: "Max turns per agent", minimum: 1 })),
+      token_budget: Type.Optional(Type.Number({ description: "Approximate token budget per agent (best-effort)", minimum: 1 })),
+      timeout_ms: Type.Optional(Type.Number({ description: "Max wall-clock time in ms per agent", minimum: 1000 })),
     }),
 
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
       if (!subagentsAvailable) {
         return textResult(
           "TaskExecute requires the @tintinweb/pi-subagents extension to be loaded. " +
@@ -735,10 +1046,10 @@ Set up task dependencies:
           continue;
         }
 
-        // Check all blockers are completed
+        // Check all blockers are resolved — missing blocker = resolved (deleted/cleared = done)
         const openBlockers = task.blockedBy.filter(bid => {
           const blocker = store.get(bid);
-          return !blocker || blocker.status !== "completed";
+          return blocker && !isTerminalStatus(blocker.status);
         });
         if (openBlockers.length > 0) {
           results.push(`#${taskId}: blocked by ${openBlockers.map(id => "#" + id).join(", ")}`);
@@ -753,23 +1064,63 @@ Set up task dependencies:
             description: task.subject,
             isBackground: true,
             maxTurns: params.max_turns,
-          });
+            ...(params.model && { model: params.model }),
+          }, signal ?? undefined);
           agentTaskMap.set(agentId, taskId);
           store.update(taskId, { owner: agentId, metadata: { ...task.metadata, agentId } });
           widget.setActiveTask(taskId);
+          taskCascadeConfigs.set(taskId, {
+            additionalContext: params.additional_context,
+            model: params.model,
+            maxTurns: params.max_turns,
+          });
+
+          // Set up budget/timeout tracking
+          if (params.token_budget || params.timeout_ms) {
+            const budget: TaskBudget = {
+              startedAt: Date.now(),
+              tokenBudget: params.token_budget,
+              tokensUsed: 0,
+              timeoutMs: params.timeout_ms,
+            };
+            if (params.timeout_ms) {
+              budget.timer = setTimeout(() => {
+                // Find and remove the agent mapping; capture the agent ID for stop RPC
+                let timedOutAgentId: string | undefined;
+                for (const [aid, tid] of agentTaskMap) {
+                  if (tid === taskId) { timedOutAgentId = aid; agentTaskMap.delete(aid); break; }
+                }
+                taskCascadeConfigs.delete(taskId);
+                // Auto-complete on timeout
+                store.update(taskId, {
+                  status: "completed",
+                  metadata: { ...store.get(taskId)?.metadata, timedOut: true },
+                });
+                widget.setActiveTask(taskId, false);
+                clearTaskBudget(taskId);
+                widget.update();
+                // Best-effort: request the subagent extension to stop the agent.
+                // pi-subagents may or may not handle this channel yet.
+                if (timedOutAgentId) {
+                  pi.events.emit("subagents:rpc:stop", { agentId: timedOutAgentId });
+                }
+              }, params.timeout_ms);
+            }
+            taskBudgets.set(taskId, budget);
+            widget.setBudget(taskId, {
+              tokenBudget: params.token_budget,
+              tokensUsed: 0,
+              startedAt: budget.startedAt,
+              timeoutMs: params.timeout_ms,
+            });
+          }
+
           launched.push(`#${taskId} → agent ${agentId}`);
         } catch (err: any) {
           store.update(taskId, { status: "pending" });
           results.push(`#${taskId}: spawn failed — ${err.message}`);
         }
       }
-
-      // Save cascade config for the completion listener
-      cascadeConfig = {
-        additionalContext: params.additional_context,
-        model: params.model,
-        maxTurns: params.max_turns,
-      };
 
       widget.update();
 
@@ -794,13 +1145,13 @@ Set up task dependencies:
       const mainMenu = async (): Promise<void> => {
         const tasks = store.list();
         const taskCount = tasks.length;
-        const completedCount = tasks.filter(t => t.status === "completed").length;
+        const terminalCount = tasks.filter(t => isTerminalStatus(t.status)).length;
 
         const choices: string[] = [
           `View all tasks (${taskCount})`,
           "Create task",
         ];
-        if (completedCount > 0) choices.push(`Clear completed (${completedCount})`);
+        if (terminalCount > 0) choices.push(`Clear completed (${terminalCount})`);
         if (taskCount > 0) choices.push(`Clear all (${taskCount})`);
         choices.push("Settings");
 
@@ -837,6 +1188,7 @@ Set up task dependencies:
           switch (status) {
             case "completed": return "✔";
             case "in_progress": return "◼";
+            case "skipped": return "⊘";
             default: return "◻";
           }
         };
@@ -867,6 +1219,9 @@ Set up task dependencies:
         if (task.status === "in_progress") {
           actions.push("✓ Complete");
         }
+        if (task.status === "pending" || task.status === "in_progress") {
+          actions.push("⊘ Skip");
+        }
         actions.push("✗ Delete");
         actions.push("← Back");
 
@@ -880,6 +1235,11 @@ Set up task dependencies:
           return viewTasks();
         } else if (action === "✓ Complete") {
           store.update(taskId, { status: "completed" });
+          widget.setActiveTask(taskId, false);
+          widget.update();
+          return viewTasks();
+        } else if (action === "⊘ Skip") {
+          store.update(taskId, { status: "skipped" });
           widget.setActiveTask(taskId, false);
           widget.update();
           return viewTasks();
@@ -909,4 +1269,20 @@ Set up task dependencies:
       await mainMenu();
     },
   });
+
+  // ── Dispose: clean up event bus listeners, timers, and widget ──
+  return {
+    dispose() {
+      for (const unsub of eventUnsubs) unsub();
+      eventUnsubs.length = 0;
+      for (const cleanup of activeSpawnCleanups) cleanup();
+      activeSpawnCleanups.clear();
+      for (const [taskId] of taskBudgets) clearTaskBudget(taskId);
+      taskBudgets.clear();
+      unsubPing();
+      unsubReady();
+      tracker.dispose();
+      widget.dispose();
+    },
+  };
 }

@@ -5,11 +5,13 @@
  *   ✔ completed tasks (strikethrough + dim)
  *   ◼ in_progress tasks
  *   ◻ pending tasks
+ *   ⊘ skipped tasks (dim)
  *   ✳/✽ actively executing task (star spinner with activeForm text)
  */
 
 import { truncateToWidth } from "@mariozechner/pi-tui";
 import type { TaskStore } from "../task-store.js";
+import { isTerminalStatus } from "../types.js";
 
 // ---- Types ----
 
@@ -40,6 +42,14 @@ export interface TaskMetrics {
   outputTokens: number;
 }
 
+/** Per-task budget info from TaskExecute. */
+export interface TaskBudgetInfo {
+  tokenBudget?: number;
+  tokensUsed: number;
+  startedAt: number;
+  timeoutMs?: number;
+}
+
 /** Format milliseconds as a human-readable duration (e.g., "2m 49s", "1h 3m"). */
 function formatDuration(ms: number): string {
   const totalSec = Math.floor(ms / 1000);
@@ -68,10 +78,14 @@ export class TaskWidget {
   private activeTaskIds = new Set<string>();
   /** Per-task runtime metrics keyed by task ID. */
   private metrics = new Map<string, TaskMetrics>();
+  /** Per-task budget info keyed by task ID. */
+  private budgets = new Map<string, TaskBudgetInfo>();
   /** Cached TUI instance for requestRender() calls. */
   private tui: any | undefined;
   /** Whether the widget callback is currently registered. */
   private widgetRegistered = false;
+  /** Cached task list — refreshed by update(), used by renderWidget(). */
+  private cachedTasks: import("../types.js").Task[] = [];
 
   constructor(private store: TaskStore) {}
 
@@ -109,27 +123,49 @@ export class TaskWidget {
     }
   }
 
-  /** Ensure the widget update timer is running. */
+  /** Set or update budget info for a task. */
+  setBudget(taskId: string, info: TaskBudgetInfo) {
+    this.budgets.set(taskId, info);
+  }
+
+  /** Remove budget info for a task. */
+  clearBudget(taskId: string) {
+    this.budgets.delete(taskId);
+  }
+
+  /** Ensure the animation timer is running. Only increments frame + re-renders — no disk I/O. */
   ensureTimer() {
     if (!this.widgetInterval) {
-      this.widgetInterval = setInterval(() => this.update(), 80);
+      this.widgetInterval = setInterval(() => {
+        this.widgetFrame++;
+        if (this.tui) this.tui.requestRender();
+      }, 80);
     }
   }
 
-  /** Build widget lines from current live state. Called from the render callback. */
+  /** Build widget lines from cached state. Called from the render callback — no disk I/O. */
   private renderWidget(tui: any, theme: Theme): string[] {
-    const tasks = this.store.list();
+    const tasks = this.cachedTasks;
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w);
 
     if (tasks.length === 0) return [];
 
+    // Build lookup map for blocker resolution (avoids individual store.get() calls)
+    const taskMap = new Map(tasks.map(t => [t.id, t]));
+
     const completed = tasks.filter(t => t.status === "completed");
+    const skipped = tasks.filter(t => t.status === "skipped");
     const inProgress = tasks.filter(t => t.status === "in_progress");
     const pending = tasks.filter(t => t.status === "pending");
 
+    // Active tasks = pending + in_progress; terminal = completed + skipped
+    const activeTasks = [...pending, ...inProgress];
+    const terminalTasks = [...completed, ...skipped];
+
     const parts: string[] = [];
     if (completed.length > 0) parts.push(`${completed.length} done`);
+    if (skipped.length > 0) parts.push(`${skipped.length} skipped`);
     if (inProgress.length > 0) parts.push(`${inProgress.length} in progress`);
     if (pending.length > 0) parts.push(`${pending.length} open`);
     const statusText = `${tasks.length} tasks (${parts.join(", ")})`;
@@ -137,73 +173,124 @@ export class TaskWidget {
     const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
-    const visible = tasks.slice(0, MAX_VISIBLE_TASKS);
-    for (let i = 0; i < visible.length; i++) {
-      const task = visible[i];
-      const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
+    // Collapse completed/skipped when there are 3+ active tasks
+    const collapseTerminal = activeTasks.length >= 3 && terminalTasks.length > 0;
 
-      let icon: string;
-      if (isActive) {
-        icon = theme.fg("accent", spinnerChar);
-      } else if (task.status === "completed") {
-        icon = theme.fg("success", "✔");
-      } else if (task.status === "in_progress") {
-        icon = theme.fg("accent", "◼");
-      } else {
-        icon = "◻";
-      }
-
-      let suffix = "";
-      if (task.status === "pending" && task.blockedBy.length > 0) {
-        const openBlockers = task.blockedBy.filter(bid => {
-          const blocker = this.store.get(bid);
-          return blocker && blocker.status !== "completed";
-        });
-        if (openBlockers.length > 0) {
-          suffix = theme.fg("dim", ` › blocked by ${openBlockers.map(id => "#" + id).join(", ")}`);
-        }
-      }
-
-      let text: string;
-      if (isActive) {
-        const form = task.activeForm || task.subject;
-        const agentId = task.metadata?.agentId;
-        const agentLabel = agentId ? ` (agent ${agentId.slice(0, 5)})` : "";
-        const m = this.metrics.get(task.id);
-        let stats = "";
-        if (m) {
-          const elapsed = formatDuration(Date.now() - m.startedAt);
-          const tokenParts: string[] = [];
-          if (m.inputTokens > 0) tokenParts.push(`↑ ${formatTokens(m.inputTokens)}`);
-          if (m.outputTokens > 0) tokenParts.push(`↓ ${formatTokens(m.outputTokens)}`);
-          stats = tokenParts.length > 0
-            ? ` ${theme.fg("dim", `(${elapsed} · ${tokenParts.join(" ")})`)}`
-            : ` ${theme.fg("dim", `(${elapsed})`)}`;
-        }
-        text = `  ${icon} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
-      } else if (task.status === "completed") {
-        text = `  ${icon} ${theme.fg("dim", theme.strikethrough(task.subject))}`;
-      } else {
-        const agentSuffix = task.status === "in_progress" && task.metadata?.agentId
-          ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
-          : "";
-        text = `  ${icon} ${task.subject}${agentSuffix}`;
-      }
-
-      lines.push(truncate(text + suffix));
+    // Build the visible task list: active tasks first, then terminal
+    let visibleTasks: import("../types.js").Task[];
+    if (collapseTerminal) {
+      visibleTasks = activeTasks.slice(0, MAX_VISIBLE_TASKS);
+    } else {
+      // Show all tasks in original order, up to MAX_VISIBLE_TASKS
+      visibleTasks = tasks.slice(0, MAX_VISIBLE_TASKS);
     }
 
-    if (tasks.length > MAX_VISIBLE_TASKS) {
-      lines.push(truncate(theme.fg("dim", `    … and ${tasks.length - MAX_VISIBLE_TASKS} more`)));
+    for (const task of visibleTasks) {
+      lines.push(truncate(this.renderTaskLine(task, taskMap, spinnerChar, theme)));
+    }
+
+    // Collapsed terminal summary
+    if (collapseTerminal) {
+      const summaryParts: string[] = [];
+      if (completed.length > 0) summaryParts.push(`${completed.length} completed`);
+      if (skipped.length > 0) summaryParts.push(`${skipped.length} skipped`);
+      lines.push(truncate(theme.fg("dim", `    ${summaryParts.join(", ")}`)));
+    }
+
+    const totalAvailable = collapseTerminal ? activeTasks.length : tasks.length;
+    if (visibleTasks.length < totalAvailable) {
+      lines.push(truncate(theme.fg("dim", `    … and ${totalAvailable - visibleTasks.length} more`)));
     }
 
     return lines;
   }
 
-  /** Force an immediate widget update. */
+  /** Render a single task line. */
+  private renderTaskLine(
+    task: import("../types.js").Task,
+    taskMap: Map<string, import("../types.js").Task>,
+    spinnerChar: string,
+    theme: Theme,
+  ): string {
+    const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
+
+    let icon: string;
+    if (isActive) {
+      icon = theme.fg("accent", spinnerChar);
+    } else if (task.status === "completed") {
+      icon = theme.fg("success", "✔");
+    } else if (task.status === "skipped") {
+      icon = theme.fg("dim", "⊘");
+    } else if (task.status === "in_progress") {
+      icon = theme.fg("accent", "◼");
+    } else {
+      icon = "◻";
+    }
+
+    let suffix = "";
+    if (task.status === "pending" && task.blockedBy.length > 0) {
+      const openBlockers = task.blockedBy.filter(bid => {
+        const blocker = taskMap.get(bid);
+        return blocker && !isTerminalStatus(blocker.status);  // missing = resolved (display only)
+      });
+      if (openBlockers.length > 0) {
+        suffix = theme.fg("dim", ` › blocked by ${openBlockers.map(id => "#" + id).join(", ")}`);
+      }
+    }
+
+    let text: string;
+    if (isActive) {
+      const form = task.activeForm || task.subject;
+      const agentId = task.metadata?.agentId;
+      const agentLabel = agentId ? ` (agent ${agentId.slice(0, 5)})` : "";
+      const m = this.metrics.get(task.id);
+      let stats = "";
+      if (m) {
+        const elapsed = formatDuration(Date.now() - m.startedAt);
+        const tokenParts: string[] = [];
+        if (m.inputTokens > 0) tokenParts.push(`↑ ${formatTokens(m.inputTokens)}`);
+        if (m.outputTokens > 0) tokenParts.push(`↓ ${formatTokens(m.outputTokens)}`);
+        stats = tokenParts.length > 0
+          ? ` ${theme.fg("dim", `(${elapsed} · ${tokenParts.join(" ")})`)}`
+          : ` ${theme.fg("dim", `(${elapsed})`)}`;
+      }
+      // Budget display
+      const budgetInfo = this.budgets.get(task.id);
+      let budgetText = "";
+      if (budgetInfo) {
+        const budgetParts: string[] = [];
+        if (budgetInfo.timeoutMs) {
+          const remaining = Math.max(0, budgetInfo.timeoutMs - (Date.now() - budgetInfo.startedAt));
+          budgetParts.push(`⏱ ${formatDuration(remaining)} left`);
+        }
+        if (budgetInfo.tokenBudget) {
+          const pct = Math.round((budgetInfo.tokensUsed / budgetInfo.tokenBudget) * 100);
+          budgetParts.push(`${pct}% budget`);
+        }
+        if (budgetParts.length > 0) {
+          budgetText = ` ${theme.fg("dim", `[${budgetParts.join(" · ")}]`)}`;
+        }
+      }
+      text = `  ${icon} ${theme.fg("accent", form + agentLabel + "…")}${stats}${budgetText}`;
+    } else if (task.status === "completed") {
+      text = `  ${icon} ${theme.fg("dim", theme.strikethrough(task.subject))}`;
+    } else if (task.status === "skipped") {
+      text = `  ${icon} ${theme.fg("dim", task.subject)}`;
+    } else {
+      const agentSuffix = task.status === "in_progress" && task.metadata?.agentId
+        ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
+        : "";
+      text = `  ${icon} ${task.subject}${agentSuffix}`;
+    }
+
+    return text + suffix;
+  }
+
+  /** Force an immediate widget update. Refreshes cache from store. */
   update() {
     if (!this.uiCtx) return;
     const tasks = this.store.list();
+    this.cachedTasks = tasks;
 
     // Transition: visible → hidden
     if (tasks.length === 0) {
@@ -218,9 +305,10 @@ export class TaskWidget {
       return;
     }
 
-    // Prune stale active IDs (deleted or no longer in_progress)
+    // Prune stale active IDs using cached tasks (no extra disk I/O)
+    const taskMap = new Map(tasks.map(t => [t.id, t]));
     for (const id of this.activeTaskIds) {
-      const t = this.store.get(id);
+      const t = taskMap.get(id);
       if (!t || t.status !== "in_progress") {
         this.activeTaskIds.delete(id);
         this.metrics.delete(id);

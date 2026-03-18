@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { TaskStore } from "../src/task-store.js";
-import { existsSync, rmSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, rmSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { tmpdir } from "node:os";
@@ -189,7 +189,7 @@ describe("TaskStore (in-memory)", () => {
 
     expect(store.get("1")!.blocks).toContain("2");
     expect(store.get("2")!.blocks).toContain("1");
-    expect(warnings).toContain("cycle: #2 and #1 block each other");
+    expect(warnings).toContain("cycle: #2 → #1 creates a dependency cycle");
   });
 
   it("allows self-dependency with warning", () => {
@@ -282,7 +282,7 @@ describe("TaskStore (in-memory)", () => {
     store.create("B", "Desc");
     store.update("1", { addBlocks: ["2"] });
     const { warnings } = store.update("1", { addBlockedBy: ["2"] });
-    expect(warnings).toContain("cycle: #1 and #2 block each other");
+    expect(warnings).toContain("cycle: #1 ← #2 creates a dependency cycle");
   });
 
   it("clearCompleted returns 0 when no completed tasks", () => {
@@ -311,6 +311,63 @@ describe("TaskStore (in-memory)", () => {
 
     expect(sorted.map(t => t.id)).toEqual(["1", "4", "3", "2"]);
     expect(sorted.map(t => t.status)).toEqual(["pending", "pending", "in_progress", "completed"]);
+  });
+  // ── New tests: skipped status ──
+
+  it("supports skipped status", () => {
+    store.create("Skippable", "Desc");
+    store.update("1", { status: "skipped" });
+    expect(store.get("1")!.status).toBe("skipped");
+  });
+
+  it("lists skipped tasks", () => {
+    store.create("Pending", "Desc");
+    store.create("Skipped", "Desc");
+    store.update("2", { status: "skipped" });
+    const tasks = store.list();
+    expect(tasks).toHaveLength(2);
+    expect(tasks.find(t => t.id === "2")!.status).toBe("skipped");
+  });
+
+  it("clearCompleted removes skipped tasks", () => {
+    store.create("Completed", "Desc");
+    store.create("Skipped", "Desc");
+    store.create("Pending", "Desc");
+    store.update("1", { status: "completed" });
+    store.update("2", { status: "skipped" });
+    const count = store.clearCompleted();
+    expect(count).toBe(2);
+    expect(store.list()).toHaveLength(1);
+    expect(store.list()[0].id).toBe("3");
+  });
+
+  // ── New tests: transitive cycle detection ──
+
+  it("detects transitive cycle: A→B→C + C→A warns", () => {
+    store.create("A", "Desc");
+    store.create("B", "Desc");
+    store.create("C", "Desc");
+    store.update("1", { addBlocks: ["2"] }); // A blocks B
+    store.update("2", { addBlocks: ["3"] }); // B blocks C
+    const { warnings } = store.update("3", { addBlocks: ["1"] }); // C blocks A → cycle!
+    expect(warnings.some(w => w.includes("cycle"))).toBe(true);
+  });
+
+  it("no warning for non-cyclic transitive deps", () => {
+    store.create("A", "Desc");
+    store.create("B", "Desc");
+    store.create("C", "Desc");
+    store.update("1", { addBlocks: ["2"] });
+    const { warnings } = store.update("2", { addBlocks: ["3"] });
+    expect(warnings).toEqual([]);
+  });
+
+  // ── New test: status in create ──
+
+  it("creates task with in_progress status via options", () => {
+    const t = store.create("Urgent", "Desc", undefined, undefined, { status: "in_progress" });
+    expect(t.status).toBe("in_progress");
+    expect(store.get("1")!.status).toBe("in_progress");
   });
 });
 
@@ -384,6 +441,53 @@ describe("TaskStore (file-backed)", () => {
     const store2 = new TaskStore(testListId);
     const t3 = store2.create("Task 3", "Desc");
     expect(t3.id).toBe("3");
+  });
+});
+
+describe("TaskStore (error handling)", () => {
+  const errFilePath = join(tmpdir(), `pi-tasks-err-${Date.now()}.json`);
+
+  afterEach(() => {
+    try { rmSync(errFilePath); } catch { /* */ }
+    try { rmSync(errFilePath + ".lock"); } catch { /* */ }
+    try { rmSync(errFilePath + ".tmp"); } catch { /* */ }
+  });
+
+  it("handles ENOENT gracefully (file deleted between calls)", () => {
+    // Create store with no backing file — ENOENT on load
+    const store = new TaskStore(errFilePath);
+    // Should start fresh without throwing
+    expect(store.list()).toEqual([]);
+  });
+
+  it("handles corrupt JSON gracefully (starts fresh)", () => {
+    // Write invalid JSON to the file
+    writeFileSync(errFilePath, "not valid json {{{");
+    const store = new TaskStore(errFilePath);
+    // Should start fresh without throwing
+    expect(store.list()).toEqual([]);
+  });
+
+  it("handles shape-invalid JSON gracefully (starts fresh)", () => {
+    // Valid JSON but wrong shape — nextId is a string, tasks missing
+    writeFileSync(errFilePath, JSON.stringify({ nextId: "abc", foo: true }));
+    const store = new TaskStore(errFilePath);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("handles JSON with missing tasks array (starts fresh)", () => {
+    writeFileSync(errFilePath, JSON.stringify({ nextId: 5 }));
+    const store = new TaskStore(errFilePath);
+    expect(store.list()).toEqual([]);
+  });
+
+  it("cleans up temp file on write failure", () => {
+    const store = new TaskStore(errFilePath);
+    store.create("Test", "Desc");
+
+    // Verify the file exists and temp file does not
+    expect(existsSync(errFilePath)).toBe(true);
+    expect(existsSync(errFilePath + ".tmp")).toBe(false);
   });
 });
 

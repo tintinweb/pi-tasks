@@ -48,6 +48,24 @@ export async function openSettingsMenu(
         currentValue: (cfg.autoCascade ?? false) ? "on" : "off",
         values: ["on", "off"],
       },
+      {
+        id: "nudgeInterval",
+        label: "Nudge interval",
+        description:
+          "How many non-task tool turns before injecting a reminder nudge. " +
+          "0 disables nudges entirely.",
+        currentValue: String(cfg.nudgeInterval ?? 4),
+        values: ["0", "2", "4", "6", "8"],
+      },
+      {
+        id: "autoClearCompleted",
+        label: "Auto-clear completed",
+        description:
+          "When ON: completed/skipped tasks are automatically cleared when creating new tasks. " +
+          "When OFF: use clearCompleted param or /tasks menu to clear manually.",
+        currentValue: (cfg.autoClearCompleted ?? false) ? "on" : "off",
+        values: ["on", "off"],
+      },
     ];
 
     const list = new SettingsList(
@@ -57,12 +75,14 @@ export async function openSettingsMenu(
       /* onChange */ (id, newValue) => {
         if (id === "autoCascade") {
           cfg.autoCascade = newValue === "on";
-          saveTasksConfig(cfg);
-        }
-        if (id === "taskScope") {
+        } else if (id === "taskScope") {
           cfg.taskScope = newValue as "memory" | "session" | "project";
-          saveTasksConfig(cfg);
+        } else if (id === "nudgeInterval") {
+          cfg.nudgeInterval = parseInt(newValue, 10);
+        } else if (id === "autoClearCompleted") {
+          cfg.autoClearCompleted = newValue === "on";
         }
+        saveTasksConfig(cfg);
       },
       /* onCancel */ () => done(undefined),
     );

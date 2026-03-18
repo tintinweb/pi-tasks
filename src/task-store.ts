@@ -11,11 +11,15 @@ import { homedir } from "node:os";
 import type { Task, TaskStatus, TaskStoreData } from "./types.js";
 
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
-const LOCK_RETRY_MS = 50;
-const LOCK_MAX_RETRIES = 100; // 5s max
+const LOCK_RETRY_MS = 10;
+const LOCK_MAX_RETRIES = 50; // 500ms max (10ms × 50)
 
-/** Simple file-based locking. */
+/** Simple file-based locking with bounded retry.
+ *  Uses Atomics.wait for thread-sleep without CPU burn. This path only
+ *  fires for project-scoped or shared stores, not the default session-
+ *  scoped mode (which skips locking entirely). */
 function acquireLock(lockPath: string): void {
+  const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
     try {
       // O_EXCL: fail if file exists
@@ -30,25 +34,33 @@ function acquireLock(lockPath: string): void {
             unlinkSync(lockPath);
             continue;
           }
-        } catch { /* ignore read errors */ }
-        // Wait and retry
-        const start = Date.now();
-        while (Date.now() - start < LOCK_RETRY_MS) { /* busy wait */ }
+        } catch {
+          // Lock file unreadable (race) — retry
+        }
+        // Sleep without burning CPU — blocks thread but only for LOCK_RETRY_MS
+        Atomics.wait(sleepBuf, 0, 0, LOCK_RETRY_MS);
         continue;
       }
       throw e;
     }
   }
-  throw new Error(`Failed to acquire lock: ${lockPath}`);
+  throw new Error(`Failed to acquire lock after ${LOCK_MAX_RETRIES} retries: ${lockPath}`);
 }
 
 function releaseLock(lockPath: string): void {
-  try { unlinkSync(lockPath); } catch { /* ignore */ }
+  try { unlinkSync(lockPath); } catch (e: any) {
+    // ENOENT: lock already removed (race) — expected; other errors are surprising
+    if (e.code !== "ENOENT") console.warn("[pi-tasks] lock release failed:", e.code);
+  }
 }
 
 function isProcessRunning(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
+
+/** How long (ms) to trust a cached disk read before re-reading.
+ *  Coalesces rapid get()/list() calls within the same event loop turn. */
+const READ_CACHE_TTL_MS = 50;
 
 export class TaskStore {
   private filePath: string | undefined;
@@ -57,6 +69,8 @@ export class TaskStore {
   // In-memory state (always kept in sync)
   private nextId = 1;
   private tasks = new Map<string, Task>();
+  /** Timestamp of last successful load() — used to skip redundant reads. */
+  private lastLoadAt = 0;
 
   constructor(listIdOrPath?: string) {
     if (!listIdOrPath) return;
@@ -69,17 +83,29 @@ export class TaskStore {
   }
 
   /** Read store from disk (file-backed mode only). */
-  private load(): void {
+  private load(force = false): void {
     if (!this.filePath) return;
-    if (!existsSync(this.filePath)) return;
+    // Skip redundant reads within the cache TTL unless forced (e.g., inside withLock)
+    if (!force && Date.now() - this.lastLoadAt < READ_CACHE_TTL_MS) return;
     try {
-      const data: TaskStoreData = JSON.parse(readFileSync(this.filePath, "utf-8"));
+      const raw = JSON.parse(readFileSync(this.filePath, "utf-8"));
+      // Shape validation — reject data that doesn't match TaskStoreData
+      if (typeof raw?.nextId !== "number" || !Array.isArray(raw?.tasks)) return;
+      const data = raw as TaskStoreData;
       this.nextId = data.nextId;
       this.tasks.clear();
       for (const t of data.tasks) {
         this.tasks.set(t.id, t);
       }
-    } catch { /* corrupt file — start fresh */ }
+      this.lastLoadAt = Date.now();
+    } catch (e: any) {
+      // ENOENT: file deleted between calls (race with deleteFileIfEmpty) — start fresh
+      if (e.code === "ENOENT") return;
+      // Corrupt JSON — start fresh
+      if (e instanceof SyntaxError) return;
+      // Unexpected errors (EACCES, etc.) — surface them
+      throw e;
+    }
   }
 
   /** Write store to disk atomically (file-backed mode only). */
@@ -90,8 +116,33 @@ export class TaskStore {
       tasks: Array.from(this.tasks.values()),
     };
     const tmpPath = this.filePath + ".tmp";
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2));
-    renameSync(tmpPath, this.filePath);
+    try {
+      writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+      renameSync(tmpPath, this.filePath);
+      this.lastLoadAt = Date.now(); // Data is fresh after write
+    } catch (e) {
+      // Clean up orphaned temp file on write failure
+      try { unlinkSync(tmpPath); } catch { /* ENOENT race — benign */ }
+      throw e;
+    }
+  }
+
+  /** DFS cycle detection: returns true if adding an edge fromId→toId would create a cycle via `blocks` edges. */
+  private hasCycle(fromId: string, toId: string): boolean {
+    // Would the edge toId.blockedBy include fromId? Check if fromId is reachable from toId via blocks edges.
+    const visited = new Set<string>();
+    const stack = [toId];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (current === fromId) return true;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      const task = this.tasks.get(current);
+      if (task) {
+        for (const dep of task.blocks) stack.push(dep);
+      }
+    }
+    return false;
   }
 
   /** Execute a mutation with file locking (if file-backed). */
@@ -99,7 +150,7 @@ export class TaskStore {
     if (!this.lockPath) return fn();
     acquireLock(this.lockPath);
     try {
-      this.load(); // Re-read latest state
+      this.load(true); // Force re-read under lock — must see latest state
       const result = fn();
       this.save();
       return result;
@@ -108,14 +159,14 @@ export class TaskStore {
     }
   }
 
-  create(subject: string, description: string, activeForm?: string, metadata?: Record<string, any>): Task {
+  create(subject: string, description: string, activeForm?: string, metadata?: Record<string, any>, options?: { status?: TaskStatus }): Task {
     return this.withLock(() => {
       const now = Date.now();
       const task: Task = {
         id: String(this.nextId++),
         subject,
         description,
-        status: "pending",
+        status: options?.status ?? "pending",
         activeForm,
         owner: undefined,
         metadata: metadata ?? {},
@@ -217,8 +268,8 @@ export class TaskStore {
             warnings.push(`#${id} blocks itself`);
           } else if (!target) {
             warnings.push(`#${targetId} does not exist`);
-          } else if (target.blocks.includes(id)) {
-            warnings.push(`cycle: #${id} and #${targetId} block each other`);
+          } else if (this.hasCycle(id, targetId)) {
+            warnings.push(`cycle: #${id} → #${targetId} creates a dependency cycle`);
           }
         }
         changedFields.push("blocks");
@@ -239,8 +290,8 @@ export class TaskStore {
             warnings.push(`#${id} blocks itself`);
           } else if (!target) {
             warnings.push(`#${targetId} does not exist`);
-          } else if (task.blocks.includes(targetId)) {
-            warnings.push(`cycle: #${id} and #${targetId} block each other`);
+          } else if (this.hasCycle(targetId, id)) {
+            warnings.push(`cycle: #${id} ← #${targetId} creates a dependency cycle`);
           }
         }
         changedFields.push("blockedBy");
@@ -277,29 +328,29 @@ export class TaskStore {
   /** Delete the backing file (if file-backed and empty). */
   deleteFileIfEmpty(): boolean {
     if (!this.filePath || this.tasks.size > 0) return false;
-    try { unlinkSync(this.filePath); } catch { /* ignore */ }
+    try { unlinkSync(this.filePath); } catch (e: any) {
+      if (e.code !== "ENOENT") console.warn("[pi-tasks] store file cleanup failed:", e.code);
+    }
     return true;
   }
 
-  /** Remove all completed tasks. */
+  /** Remove all completed and skipped tasks (single-pass). */
   clearCompleted(): number {
     return this.withLock(() => {
-      let count = 0;
+      // Collect completed/skipped IDs first
+      const terminalIds = new Set<string>();
       for (const [id, task] of this.tasks) {
-        if (task.status === "completed") {
-          this.tasks.delete(id);
-          count++;
-        }
+        if (task.status === "completed" || task.status === "skipped") terminalIds.add(id);
       }
-      // Clean up dependency edges for deleted tasks
-      if (count > 0) {
-        const validIds = new Set(this.tasks.keys());
-        for (const t of this.tasks.values()) {
-          t.blocks = t.blocks.filter(bid => validIds.has(bid));
-          t.blockedBy = t.blockedBy.filter(bid => validIds.has(bid));
-        }
+      if (terminalIds.size === 0) return 0;
+
+      // Delete terminal and clean edges on remaining tasks in one pass
+      for (const id of terminalIds) this.tasks.delete(id);
+      for (const t of this.tasks.values()) {
+        t.blocks = t.blocks.filter(bid => !terminalIds.has(bid));
+        t.blockedBy = t.blockedBy.filter(bid => !terminalIds.has(bid));
       }
-      return count;
+      return terminalIds.size;
     });
   }
 }

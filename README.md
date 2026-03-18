@@ -57,18 +57,42 @@ The extension renders a persistent widget above the editor:
 
 ### `TaskCreate`
 
-Create a structured task. Used proactively for complex multi-step work.
+Create one or more structured tasks. Supports single-task and batch modes.
+
+**Single mode** — pass `subject` and `description` directly:
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `subject` | string | yes | Brief imperative title |
-| `description` | string | yes | Detailed context and acceptance criteria |
+| `subject` | string | yes* | Brief imperative title |
+| `description` | string | yes* | Detailed context and acceptance criteria |
 | `activeForm` | string | no | Present continuous form for spinner (e.g., "Running tests") |
 | `agentType` | string | no | Agent type for subagent execution (e.g., `"general-purpose"`, `"Explore"`) |
 | `metadata` | object | no | Arbitrary key-value pairs |
+| `blockedBy` | string[] | no | Task IDs that block this task |
+| `blocks` | string[] | no | Task IDs that this task blocks |
+| `status` | `pending` / `in_progress` | no | Initial status (default: `pending`) |
+| `clearCompleted` | boolean | no | Clear completed/skipped tasks before creating (default: `true`) |
+
+*\*Required unless `tasks` array is provided.*
 
 ```
 → Task #1 created successfully: Fix authentication bug
+```
+
+**Batch mode** — pass a `tasks` array:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tasks` | array | yes | Array of task objects (same fields as single mode) |
+| `clearCompleted` | boolean | no | Clear completed/skipped tasks before creating (default: `true`) |
+
+Tasks are created in array order with sequential IDs. Use the expected IDs in `blockedBy`/`blocks` to wire dependencies within the same batch.
+
+```
+→ Created 3 task(s):
+  #1: Set up database schema
+  #2: Implement API endpoints
+  #3: Write integration tests
 ```
 
 ### `TaskList`
@@ -105,7 +129,7 @@ Update task fields, status, metadata, and dependencies.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `taskId` | string | Task ID (required) |
-| `status` | `pending` / `in_progress` / `completed` / `deleted` | New status |
+| `status` | `pending` / `in_progress` / `completed` / `skipped` / `deleted` | New status |
 | `subject` | string | New title |
 | `description` | string | New description |
 | `activeForm` | string | Spinner text |
@@ -154,6 +178,8 @@ Execute one or more tasks as background subagents. Requires [@tintinweb/pi-subag
 | `additional_context` | string | Extra context appended to each agent's prompt |
 | `model` | string | Model override (e.g., `"sonnet"`, `"haiku"`) |
 | `max_turns` | number | Max turns per agent |
+| `token_budget` | number | Approximate token budget per agent (display/tracking only) |
+| `timeout_ms` | number | Max wall-clock time in ms — marks task completed and emits stop RPC |
 
 Tasks must be `pending`, have `agentType` set, and all `blockedBy` dependencies `completed`. Each task spawns as an independent background subagent.
 
@@ -188,7 +214,7 @@ Task storage is controlled by the `taskScope` setting (`/tasks` → Settings →
 
 On new session start, if all persisted tasks are completed they are auto-cleared for a clean slate. On session resume, all tasks (including completed) are shown so the user can review progress. Empty session files are automatically deleted when all tasks are cleared.
 
-Settings (`taskScope`, `autoCascade`) are saved to `<cwd>/.pi/tasks-config.json`.
+Settings (`taskScope`, `autoCascade`, `nudgeInterval`, `autoClearCompleted`) are saved to `<cwd>/.pi/tasks-config.json`.
 
 ### Override via environment variables
 
@@ -288,7 +314,7 @@ src/
 ├── index.ts            # Extension entry: 7 tools + /tasks command + widget + subagent integration
 ├── types.ts            # Task, TaskStatus, BackgroundProcess types
 ├── task-store.ts       # File-backed store with CRUD, dependencies, locking
-├── tasks-config.ts     # Config persistence (taskScope, autoCascade) → .pi/tasks-config.json
+├── tasks-config.ts     # Config persistence (taskScope, autoCascade, nudgeInterval, autoClearCompleted) → .pi/tasks-config.json
 ├── process-tracker.ts  # Background process output buffering and stop
 └── ui/
     ├── task-widget.ts  # Persistent widget with status icons and spinner
@@ -304,7 +330,7 @@ src/
 ```bash
 npm install
 npm run typecheck   # TypeScript validation
-npm test            # Run unit tests (116 tests)
+npm test            # Run unit tests (181+ tests)
 ```
 
 ## License
