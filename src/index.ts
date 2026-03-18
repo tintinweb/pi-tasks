@@ -20,7 +20,7 @@ import { TaskStore } from "./task-store.js";
 import { ProcessTracker } from "./process-tracker.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
 import { loadTasksConfig } from "./tasks-config.js";
-import { isTerminalStatus, type TaskBudget } from "./types.js";
+import { isTerminalStatus, type TaskBudget, type TaskStatus } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
@@ -263,31 +263,27 @@ export default function (pi: ExtensionAPI) {
     pi.events.emit(`tasks:rpc:ping:reply:${requestId}`, {});
   }));
 
-  // Broadcast availability (covers: tasks loads after requester)
-  pi.events.emit("tasks:ready", {});
-
   // createMany: batch create tasks with optional deps
   eventUnsubs.push(pi.events.on("tasks:rpc:createMany", (payload: unknown) => {
-    const { requestId, tasks: taskDefs, clearCompleted: clear } =
-      payload as {
-        requestId: string;
-        tasks: Array<{
-          subject: string;
-          description: string;
-          activeForm?: string;
-          metadata?: Record<string, any>;
-          status?: TaskStatus;
-          blockedBy?: string[];
-          blocks?: string[];
-        }>;
-        clearCompleted?: boolean;
-      };
+    const p = payload as Record<string, unknown> | undefined;
+    if (!p || typeof p.requestId !== "string" || !Array.isArray(p.tasks)) return;
+    const requestId = p.requestId;
+    const taskDefs = p.tasks as Array<{
+      subject: string;
+      description: string;
+      activeForm?: string;
+      metadata?: Record<string, any>;
+      status?: TaskStatus;
+      blockedBy?: string[];
+      blocks?: string[];
+    }>;
+    const clear = p.clearCompleted === true;
 
+    const created: Array<{ id: string; blockedBy?: string[]; blocks?: string[] }> = [];
     try {
       if (clear) store.clearCompleted();
 
       // Create all tasks first, collecting IDs
-      const created: Array<{ id: string; blockedBy?: string[]; blocks?: string[] }> = [];
       for (const def of taskDefs) {
         const task = store.create(
           def.subject,
@@ -317,25 +313,26 @@ export default function (pi: ExtensionAPI) {
     } catch (err: any) {
       pi.events.emit(`tasks:rpc:createMany:reply:${requestId}`, {
         error: err.message,
+        // Partial: tasks created before the error are already persisted
+        partialIds: created.map(c => c.id),
       });
     }
   }));
 
   // update: update a single task
   eventUnsubs.push(pi.events.on("tasks:rpc:update", (payload: unknown) => {
-    const { requestId, taskId, fields } =
-      payload as {
-        requestId: string;
-        taskId: string;
-        fields: {
-          status?: TaskStatus | "deleted";
-          subject?: string;
-          description?: string;
-          activeForm?: string;
-          owner?: string;
-          metadata?: Record<string, any>;
-        };
-      };
+    const p = payload as Record<string, unknown> | undefined;
+    if (!p || typeof p.requestId !== "string" || typeof p.taskId !== "string") return;
+    const requestId = p.requestId;
+    const taskId = p.taskId;
+    const fields = (p.fields ?? {}) as {
+      status?: TaskStatus | "deleted";
+      subject?: string;
+      description?: string;
+      activeForm?: string;
+      owner?: string;
+      metadata?: Record<string, any>;
+    };
 
     try {
       const result = store.update(taskId, fields);
@@ -349,6 +346,10 @@ export default function (pi: ExtensionAPI) {
       });
     }
   }));
+
+  // Broadcast availability AFTER all RPC handlers are registered,
+  // so consumers that react to tasks:ready can immediately call any RPC.
+  pi.events.emit("tasks:ready", {});
 
   // ── Session-scoped store upgrade ──
   // For session scope, the store starts in-memory (no session ID at init time).

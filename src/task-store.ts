@@ -15,11 +15,11 @@ const LOCK_RETRY_MS = 10;
 const LOCK_MAX_RETRIES = 50; // 500ms max (10ms × 50)
 
 /** Simple file-based locking with bounded retry.
- *  Uses a short spin-sleep to avoid Atomics.wait (which blocks the event
- *  loop on the main thread). Contention is rare in practice — this path
- *  only fires for project-scoped or shared stores, not the default
- *  session-scoped mode. */
+ *  Uses Atomics.wait for thread-sleep without CPU burn. This path only
+ *  fires for project-scoped or shared stores, not the default session-
+ *  scoped mode (which skips locking entirely). */
 function acquireLock(lockPath: string): void {
+  const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
     try {
       // O_EXCL: fail if file exists
@@ -37,10 +37,8 @@ function acquireLock(lockPath: string): void {
         } catch {
           // Lock file unreadable (race) — retry
         }
-        // Brief spin-sleep: burn a few ms checking Date.now() rather than
-        // blocking the entire thread with Atomics.wait.
-        const deadline = Date.now() + LOCK_RETRY_MS;
-        while (Date.now() < deadline) { /* spin */ }
+        // Sleep without burning CPU — blocks thread but only for LOCK_RETRY_MS
+        Atomics.wait(sleepBuf, 0, 0, LOCK_RETRY_MS);
         continue;
       }
       throw e;
