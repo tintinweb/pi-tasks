@@ -209,7 +209,7 @@ export default function (pi: ExtensionAPI) {
         t.status === "pending" &&
         t.metadata?.agentType &&
         t.blockedBy.includes(task.id) &&
-        t.blockedBy.every(depId => { const s = store.get(depId)?.status; return s !== undefined && isTerminalStatus(s); })
+        t.blockedBy.every(depId => { const blocker = store.get(depId); return !blocker || isTerminalStatus(blocker.status); })
       );
       for (const next of unblocked) {
         store.update(next.id, { status: "in_progress" });
@@ -297,18 +297,21 @@ export default function (pi: ExtensionAPI) {
 
       // Wire dependencies (IDs in blockedBy/blocks may reference
       // tasks created in this batch, so we do it after all creates)
+      const rpcWarnings: string[] = [];
       for (const c of created) {
         if (c.blockedBy?.length || c.blocks?.length) {
-          store.update(c.id, {
+          const result = store.update(c.id, {
             ...(c.blockedBy?.length ? { addBlockedBy: c.blockedBy } : {}),
             ...(c.blocks?.length ? { addBlocks: c.blocks } : {}),
           });
+          rpcWarnings.push(...result.warnings);
         }
       }
 
       widget.update();
       pi.events.emit(`tasks:rpc:createMany:reply:${requestId}`, {
         ids: created.map(c => c.id),
+        ...(rpcWarnings.length > 0 && { warnings: rpcWarnings }),
       });
     } catch (err: any) {
       pi.events.emit(`tasks:rpc:createMany:reply:${requestId}`, {
@@ -498,12 +501,13 @@ export default function (pi: ExtensionAPI) {
     widget.update();
   });
 
-  /** Shared logic for creating a single task (used by TaskCreate and TaskCreateMany). */
+  /** Shared logic for creating a single task (used by TaskCreate and TaskCreateMany).
+   *  Returns the created task and any dependency warnings (dangling refs, cycles). */
   function createSingleTask(params: {
     subject: string; description: string; activeForm?: string; agentType?: string;
     metadata?: Record<string, any>; blockedBy?: string[]; blocks?: string[];
     status?: "pending" | "in_progress";
-  }) {
+  }): { task: ReturnType<typeof store.create>; warnings: string[] } {
     const meta = params.metadata ?? {};
     if (params.agentType) meta.agentType = params.agentType;
     const task = store.create(
@@ -513,17 +517,19 @@ export default function (pi: ExtensionAPI) {
     );
 
     // Wire dependencies if provided
+    let warnings: string[] = [];
     const depFields: { addBlocks?: string[]; addBlockedBy?: string[] } = {};
     if (params.blocks?.length) depFields.addBlocks = params.blocks;
     if (params.blockedBy?.length) depFields.addBlockedBy = params.blockedBy;
     if (depFields.addBlocks || depFields.addBlockedBy) {
-      store.update(task.id, depFields);
+      const result = store.update(task.id, depFields);
+      warnings = result.warnings;
     }
 
     if (params.status === "in_progress") {
       widget.setActiveTask(task.id);
     }
-    return task;
+    return { task, warnings };
   }
 
   // ──────────────────────────────────────────────────
@@ -608,9 +614,11 @@ To run a task as a subagent: (1) create the task with \`agentType\` set (e.g., "
       const shouldClear = params.clearCompleted ?? (cfg.autoClearCompleted ?? false);
       if (shouldClear) store.clearCompleted();
 
-      const task = createSingleTask(params);
+      const { task, warnings } = createSingleTask(params);
       widget.update();
-      return Promise.resolve(textResult(formatTaskDetail(store.get(task.id) ?? task)));
+      let text = formatTaskDetail(store.get(task.id) ?? task);
+      if (warnings.length > 0) text += `\nWarnings: ${warnings.join("; ")}`;
+      return Promise.resolve(textResult(text));
     },
   });
 
@@ -656,16 +664,20 @@ Use TaskList first to determine the next available ID if needed.`,
       if (shouldClear) store.clearCompleted();
 
       const createdTasks: Array<{ id: string; subject: string }> = [];
+      const allWarnings: string[] = [];
 
       for (const t of params.tasks) {
-        const task = createSingleTask(t);
+        const { task, warnings } = createSingleTask(t);
         createdTasks.push({ id: task.id, subject: task.subject });
+        allWarnings.push(...warnings);
       }
 
       widget.update();
 
       const lines = createdTasks.map(t => `#${t.id}: ${t.subject}`);
-      return Promise.resolve(textResult(`Created ${createdTasks.length} task(s):\n${lines.join("\n")}`));
+      let text = `Created ${createdTasks.length} task(s):\n${lines.join("\n")}`;
+      if (allWarnings.length > 0) text += `\nWarnings: ${allWarnings.join("; ")}`;
+      return Promise.resolve(textResult(text));
     },
   });
 
@@ -1043,10 +1055,10 @@ Set up task dependencies:
           continue;
         }
 
-        // Check all blockers are resolved (completed or skipped) — missing blocker = unresolved
+        // Check all blockers are resolved — missing blocker = resolved (deleted/cleared = done)
         const openBlockers = task.blockedBy.filter(bid => {
           const blocker = store.get(bid);
-          return !blocker || !isTerminalStatus(blocker.status);
+          return blocker && !isTerminalStatus(blocker.status);
         });
         if (openBlockers.length > 0) {
           results.push(`#${taskId}: blocked by ${openBlockers.map(id => "#" + id).join(", ")}`);

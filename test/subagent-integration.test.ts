@@ -1178,6 +1178,83 @@ describe("Auto-cascade with skipped blocker", () => {
   });
 });
 
+describe("clearCompleted + blockedBy interaction", () => {
+  let mock: ReturnType<typeof mockPi>;
+  let rpc: ReturnType<typeof installSubagentsMock>;
+
+  beforeEach(() => {
+    mock = mockPi();
+    rpc = installSubagentsMock(mock.pi);
+    initExtension(mock.pi as any);
+  });
+
+  afterEach(() => {
+    rpc.unsub();
+  });
+
+  it("does not permanently block tasks referencing cleared task IDs", async () => {
+    // Reproduce exact session failure:
+    // 1. Create task #1, complete it
+    // 2. TaskCreateMany with clearCompleted=true creates #2 with blockedBy=['1']
+    // 3. #1 is cleared (deleted), but #2 still references it
+    // 4. TaskExecute should treat the missing blocker as resolved, not blocked
+    await mock.executeTool("TaskCreate", {
+      subject: "Phase 1",
+      description: "desc",
+    });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" });
+
+    await mock.executeTool("TaskCreateMany", {
+      clearCompleted: true,
+      tasks: [
+        { subject: "Independent", description: "desc", agentType: "general-purpose" },
+        { subject: "Depends on cleared", description: "desc", agentType: "general-purpose", blockedBy: ["1"] },
+      ],
+    });
+
+    // Task #3 references blocker #1 which was cleared — should be executable
+    const result = await mock.executeTool("TaskExecute", { task_ids: ["3"] });
+    expect(result.content[0].text).toContain("Launched 1 agent");
+  });
+
+  it("surfaces warnings for dangling blockedBy references", async () => {
+    // Create task with blockedBy referencing non-existent task
+    const result = await mock.executeTool("TaskCreate", {
+      subject: "Orphan ref",
+      description: "desc",
+      blockedBy: ["999"],
+    });
+    expect(result.content[0].text).toContain("Warning");
+    expect(result.content[0].text).toContain("#999");
+  });
+
+  it("surfaces warnings in TaskCreateMany for dangling refs", async () => {
+    const result = await mock.executeTool("TaskCreateMany", {
+      tasks: [
+        { subject: "Good task", description: "desc" },
+        { subject: "Bad ref", description: "desc", blockedBy: ["888"] },
+      ],
+    });
+    expect(result.content[0].text).toContain("Warning");
+    expect(result.content[0].text).toContain("#888");
+  });
+
+  it("treats missing blockers as resolved in TaskList display", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Blocker", description: "desc" });
+    await mock.executeTool("TaskCreate", {
+      subject: "Blocked",
+      description: "desc",
+      blockedBy: ["1"],
+    });
+    // Delete the blocker
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "deleted" });
+
+    // Task #2 should not show "blocked by #1" — the blocker is gone
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).not.toContain("blocked by");
+  });
+});
+
 describe("Skipped status in tools", () => {
   let mock: ReturnType<typeof mockPi>;
   let rpc: ReturnType<typeof installSubagentsMock>;
