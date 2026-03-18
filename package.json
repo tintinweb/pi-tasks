@@ -12,6 +12,9 @@
   "bugs": {
     "url": "https://github.com/tintinweb/pi-tasks/issues"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "keywords": [
     "pi-package",
     "pi",
@@ -24,7 +27,7 @@
   "dependencies": {
     "@mariozechner/pi-coding-agent": "^0.57.1",
     "@mariozechner/pi-tui": "^0.57.1",
-    "@sinclair/typebox": "latest"
+    "@sinclair/typebox": "^0.34.48"
   },
   "scripts": {
     "test": "vitest run",

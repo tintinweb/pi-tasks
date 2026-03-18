@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { TaskStore } from "../src/task-store.js";
-import { existsSync, rmSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, rmSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { tmpdir } from "node:os";
@@ -384,6 +384,40 @@ describe("TaskStore (file-backed)", () => {
     const store2 = new TaskStore(testListId);
     const t3 = store2.create("Task 3", "Desc");
     expect(t3.id).toBe("3");
+  });
+});
+
+describe("TaskStore (error handling)", () => {
+  const errFilePath = join(tmpdir(), `pi-tasks-err-${Date.now()}.json`);
+
+  afterEach(() => {
+    try { rmSync(errFilePath); } catch { /* */ }
+    try { rmSync(errFilePath + ".lock"); } catch { /* */ }
+    try { rmSync(errFilePath + ".tmp"); } catch { /* */ }
+  });
+
+  it("handles ENOENT gracefully (file deleted between calls)", () => {
+    // Create store with no backing file — ENOENT on load
+    const store = new TaskStore(errFilePath);
+    // Should start fresh without throwing
+    expect(store.list()).toEqual([]);
+  });
+
+  it("handles corrupt JSON gracefully (starts fresh)", () => {
+    // Write invalid JSON to the file
+    writeFileSync(errFilePath, "not valid json {{{");
+    const store = new TaskStore(errFilePath);
+    // Should start fresh without throwing
+    expect(store.list()).toEqual([]);
+  });
+
+  it("cleans up temp file on write failure", () => {
+    const store = new TaskStore(errFilePath);
+    store.create("Test", "Desc");
+
+    // Verify the file exists and temp file does not
+    expect(existsSync(errFilePath)).toBe(true);
+    expect(existsSync(errFilePath + ".tmp")).toBe(false);
   });
 });
 

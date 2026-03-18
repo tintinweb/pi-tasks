@@ -72,6 +72,8 @@ export class TaskWidget {
   private tui: any | undefined;
   /** Whether the widget callback is currently registered. */
   private widgetRegistered = false;
+  /** Cached task list — refreshed by update(), used by renderWidget(). */
+  private cachedTasks: import("../types.js").Task[] = [];
 
   constructor(private store: TaskStore) {}
 
@@ -109,20 +111,26 @@ export class TaskWidget {
     }
   }
 
-  /** Ensure the widget update timer is running. */
+  /** Ensure the animation timer is running. Only increments frame + re-renders — no disk I/O. */
   ensureTimer() {
     if (!this.widgetInterval) {
-      this.widgetInterval = setInterval(() => this.update(), 80);
+      this.widgetInterval = setInterval(() => {
+        this.widgetFrame++;
+        if (this.tui) this.tui.requestRender();
+      }, 80);
     }
   }
 
-  /** Build widget lines from current live state. Called from the render callback. */
+  /** Build widget lines from cached state. Called from the render callback — no disk I/O. */
   private renderWidget(tui: any, theme: Theme): string[] {
-    const tasks = this.store.list();
+    const tasks = this.cachedTasks;
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w);
 
     if (tasks.length === 0) return [];
+
+    // Build lookup map for blocker resolution (avoids individual store.get() calls)
+    const taskMap = new Map(tasks.map(t => [t.id, t]));
 
     const completed = tasks.filter(t => t.status === "completed");
     const inProgress = tasks.filter(t => t.status === "in_progress");
@@ -156,7 +164,7 @@ export class TaskWidget {
       let suffix = "";
       if (task.status === "pending" && task.blockedBy.length > 0) {
         const openBlockers = task.blockedBy.filter(bid => {
-          const blocker = this.store.get(bid);
+          const blocker = taskMap.get(bid);
           return blocker && blocker.status !== "completed";
         });
         if (openBlockers.length > 0) {
@@ -200,10 +208,11 @@ export class TaskWidget {
     return lines;
   }
 
-  /** Force an immediate widget update. */
+  /** Force an immediate widget update. Refreshes cache from store. */
   update() {
     if (!this.uiCtx) return;
     const tasks = this.store.list();
+    this.cachedTasks = tasks;
 
     // Transition: visible → hidden
     if (tasks.length === 0) {
@@ -218,9 +227,10 @@ export class TaskWidget {
       return;
     }
 
-    // Prune stale active IDs (deleted or no longer in_progress)
+    // Prune stale active IDs using cached tasks (no extra disk I/O)
+    const taskMap = new Map(tasks.map(t => [t.id, t]));
     for (const id of this.activeTaskIds) {
-      const t = this.store.get(id);
+      const t = taskMap.get(id);
       if (!t || t.status !== "in_progress") {
         this.activeTaskIds.delete(id);
         this.metrics.delete(id);

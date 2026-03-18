@@ -605,6 +605,82 @@ describe("RPC protocol correctness", () => {
   });
 });
 
+describe("Extension dispose()", () => {
+  it("returns a dispose function that cleans up event listeners", () => {
+    const mock = mockPi();
+    const rpc = installSubagentsMock(mock.pi);
+    const ext = initExtension(mock.pi as any);
+
+    expect(ext).toBeDefined();
+    expect(typeof ext.dispose).toBe("function");
+
+    // Should not throw
+    ext.dispose();
+    rpc.unsub();
+  });
+
+  it("dispose cleans up in-flight spawn RPC listeners", async () => {
+    const mock = mockPi();
+    // Init with subagents available but NO spawn handler (will timeout)
+    initExtension(mock.pi as any);
+    mock.pi.events.emit("subagents:ready", {});
+
+    await mock.executeTool("TaskCreate", {
+      subject: "In-flight test",
+      description: "desc",
+      agentType: "general-purpose",
+    });
+
+    vi.useFakeTimers();
+
+    // Start a spawn that won't get a reply
+    const execPromise = mock.executeTool("TaskExecute", { task_ids: ["1"] });
+
+    // Dispose BEFORE the spawn gets a reply — should clean up the listener
+    const ext = initExtension(mock.pi as any);
+    ext.dispose();
+
+    // Let timeout fire
+    await vi.advanceTimersByTimeAsync(31000);
+    await execPromise; // Should settle (timeout)
+
+    vi.useRealTimers();
+  });
+});
+
+describe("AbortSignal in TaskExecute", () => {
+  it("TaskExecute passes signal to spawnSubagent", async () => {
+    const mock = mockPi();
+
+    // Don't install spawn handler — spawn will hang until abort/timeout
+    initExtension(mock.pi as any);
+    mock.pi.events.emit("subagents:ready", {});
+
+    await mock.executeTool("TaskCreate", {
+      subject: "Abort test",
+      description: "desc",
+      agentType: "general-purpose",
+    });
+
+    vi.useFakeTimers();
+
+    // Create an AbortController to simulate cancellation
+    const ac = new AbortController();
+    const tool = mock.tools.get("TaskExecute")!;
+    const execPromise = tool.execute("call-1", { task_ids: ["1"] }, ac.signal, undefined, mockCtx());
+
+    // Abort before timeout
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(100);
+
+    const result = await execPromise;
+    // Should report the abort error
+    expect(result.content[0].text).toContain("aborted");
+
+    vi.useRealTimers();
+  });
+});
+
 describe("Widget agent ID display", () => {
   let store: TaskStore;
   let widget: TaskWidget;

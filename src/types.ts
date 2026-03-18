@@ -30,8 +30,10 @@ export interface BackgroundProcess {
   pid: number;
   command?: string;
   output: string[];
+  totalBytes: number;
   status: "running" | "completed" | "error" | "stopped";
   exitCode?: number;
+  signal?: string;
   startedAt: number;
   completedAt?: number;
   proc: import("node:child_process").ChildProcess;

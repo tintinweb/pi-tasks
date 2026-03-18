@@ -27,7 +27,7 @@ import { join, resolve } from "node:path";
 // ---- Helpers ----
 
 function textResult(msg: string) {
-  return { content: [{ type: "text" as const, text: msg }], details: undefined as any };
+  return { content: [{ type: "text" as const, text: msg }], details: undefined };
 }
 
 /** Task tool names — used to detect task tool usage for reminder suppression. */
@@ -69,8 +69,8 @@ export default function (pi: ExtensionAPI) {
   // ── Subagent integration state ──
   /** Latest ExtensionContext — refreshed on every tool execution so cascade always has a valid one. */
   let latestCtx: ExtensionContext | undefined;
-  /** Cascade config — set by TaskExecute, consumed by completion listener. */
-  let cascadeConfig: { additionalContext?: string; model?: string; maxTurns?: number } | undefined;
+  /** Per-task cascade config — set by TaskExecute, consumed by completion listener. */
+  const taskCascadeConfigs = new Map<string, { additionalContext?: string; model?: string; maxTurns?: number }>();
   /** Maps agent IDs to task IDs for O(1) completion lookup. */
   const agentTaskMap = new Map<string, string>();
 
@@ -88,22 +88,49 @@ export default function (pi: ExtensionAPI) {
   pi.events.emit("subagents:rpc:ping", { requestId: pingId });
 
   // Also listen for ready broadcast (covers: subagents loads after us)
-  pi.events.on("subagents:ready", () => {
+  const unsubReady = pi.events.on("subagents:ready", () => {
     subagentsAvailable = true;
+    unsubReady();  // self-remove to prevent listener leak
     unsubPing();   // clean up ping listener if still pending
   });
 
   /** Spawn a subagent via pi.events RPC (requires @tintinweb/pi-subagents extension). */
-  function spawnSubagent(type: string, prompt: string, options?: any): Promise<string> {
+  function spawnSubagent(type: string, prompt: string, options?: any, signal?: AbortSignal): Promise<string> {
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { unsub(); reject(new Error("subagents:rpc:spawn timeout")); }, 30000);
+      let settled = false;
+      const timer = setTimeout(() => { cleanup(); reject(new Error("subagents:rpc:spawn timeout")); }, 30000);
       const unsub = pi.events.on(`subagents:rpc:spawn:reply:${requestId}`, (p: unknown) => {
+        if (settled) return;
         const { id, error } = p as { id?: string; error?: string };
-        unsub(); clearTimeout(timer);
+        cleanup();
         if (error) reject(new Error(error));
         else resolve(id!);
       });
+
+      function cleanup() {
+        if (settled) return;
+        settled = true;
+        unsub();
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        activeSpawnCleanups.delete(cleanup);
+      }
+
+      activeSpawnCleanups.add(cleanup);
+
+      function onAbort() {
+        cleanup();
+        reject(new DOMException("The operation was aborted", "AbortError"));
+      }
+
+      if (signal?.aborted) {
+        cleanup();
+        reject(new DOMException("The operation was aborted", "AbortError"));
+        return;
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+
       pi.events.emit("subagents:rpc:spawn", { requestId, type, prompt, options });
     });
   }
@@ -119,8 +146,13 @@ export default function (pi: ExtensionAPI) {
   // ── Subagent completion listener ──
   // Listens for subagent lifecycle events to update task status and optionally cascade.
 
+  // Collect event bus unsub handles for dispose()
+  const eventUnsubs: Array<() => void> = [];
+  // Track in-flight spawn RPC cleanup functions for dispose()
+  const activeSpawnCleanups = new Set<() => void>();
+
   // Success → mark task completed, cascade if enabled
-  pi.events.on("subagents:completed", async (data) => {
+  eventUnsubs.push(pi.events.on("subagents:completed", async (data) => {
     const { id, result } = data as { id: string; result?: string };
     const taskId = agentTaskMap.get(id);
     if (!taskId) return;
@@ -132,6 +164,8 @@ export default function (pi: ExtensionAPI) {
     widget.setActiveTask(task.id, false);
 
     // Auto-cascade: find unblocked dependents with agentType
+    const cascadeConfig = taskCascadeConfigs.get(taskId);
+    taskCascadeConfigs.delete(taskId);
     if ((cfg.autoCascade ?? false) && cascadeConfig && latestCtx) {
       const unblocked = store.list().filter(t =>
         t.status === "pending" &&
@@ -151,16 +185,18 @@ export default function (pi: ExtensionAPI) {
           agentTaskMap.set(agentId, next.id);
           store.update(next.id, { owner: agentId, metadata: { ...next.metadata, agentId } });
           widget.setActiveTask(next.id);
+          // Propagate cascade config to dependent task
+          taskCascadeConfigs.set(next.id, cascadeConfig);
         } catch (err: any) {
           store.update(next.id, { status: "pending", metadata: { ...next.metadata, lastError: err.message } });
         }
       }
     }
     widget.update();
-  });
+  }));
 
   // Failure → store error, revert to pending, don't cascade (branch stops)
-  pi.events.on("subagents:failed", (data) => {
+  eventUnsubs.push(pi.events.on("subagents:failed", (data) => {
     const { id, error, status } = data as { id: string; error?: string; status: string };
     const taskId = agentTaskMap.get(id);
     if (!taskId) return;
@@ -173,7 +209,7 @@ export default function (pi: ExtensionAPI) {
     });
     widget.setActiveTask(task.id, false);
     widget.update();
-  });
+  }));
 
   // ── Session-scoped store upgrade ──
   // For session scope, the store starts in-memory (no session ID at init time).
@@ -709,7 +745,7 @@ Set up task dependencies:
       max_turns: Type.Optional(Type.Number({ description: "Max turns per agent", minimum: 1 })),
     }),
 
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
       if (!subagentsAvailable) {
         return textResult(
           "TaskExecute requires the @tintinweb/pi-subagents extension to be loaded. " +
@@ -753,23 +789,21 @@ Set up task dependencies:
             description: task.subject,
             isBackground: true,
             maxTurns: params.max_turns,
-          });
+          }, signal ?? undefined);
           agentTaskMap.set(agentId, taskId);
           store.update(taskId, { owner: agentId, metadata: { ...task.metadata, agentId } });
           widget.setActiveTask(taskId);
+          taskCascadeConfigs.set(taskId, {
+            additionalContext: params.additional_context,
+            model: params.model,
+            maxTurns: params.max_turns,
+          });
           launched.push(`#${taskId} → agent ${agentId}`);
         } catch (err: any) {
           store.update(taskId, { status: "pending" });
           results.push(`#${taskId}: spawn failed — ${err.message}`);
         }
       }
-
-      // Save cascade config for the completion listener
-      cascadeConfig = {
-        additionalContext: params.additional_context,
-        model: params.model,
-        maxTurns: params.max_turns,
-      };
 
       widget.update();
 
@@ -909,4 +943,17 @@ Set up task dependencies:
       await mainMenu();
     },
   });
+
+  // ── Dispose: clean up event bus listeners, timers, and widget ──
+  return {
+    dispose() {
+      for (const unsub of eventUnsubs) unsub();
+      eventUnsubs.length = 0;
+      for (const cleanup of activeSpawnCleanups) cleanup();
+      activeSpawnCleanups.clear();
+      unsubPing();
+      unsubReady();
+      widget.dispose();
+    },
+  };
 }

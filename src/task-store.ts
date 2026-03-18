@@ -16,6 +16,7 @@ const LOCK_MAX_RETRIES = 100; // 5s max
 
 /** Simple file-based locking. */
 function acquireLock(lockPath: string): void {
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
     try {
       // O_EXCL: fail if file exists
@@ -31,9 +32,8 @@ function acquireLock(lockPath: string): void {
             continue;
           }
         } catch { /* ignore read errors */ }
-        // Wait and retry
-        const start = Date.now();
-        while (Date.now() - start < LOCK_RETRY_MS) { /* busy wait */ }
+        // Wait and retry — block thread without burning CPU
+        Atomics.wait(waitBuffer, 0, 0, LOCK_RETRY_MS);
         continue;
       }
       throw e;
@@ -71,7 +71,6 @@ export class TaskStore {
   /** Read store from disk (file-backed mode only). */
   private load(): void {
     if (!this.filePath) return;
-    if (!existsSync(this.filePath)) return;
     try {
       const data: TaskStoreData = JSON.parse(readFileSync(this.filePath, "utf-8"));
       this.nextId = data.nextId;
@@ -79,7 +78,14 @@ export class TaskStore {
       for (const t of data.tasks) {
         this.tasks.set(t.id, t);
       }
-    } catch { /* corrupt file — start fresh */ }
+    } catch (e: any) {
+      // ENOENT: file deleted between calls (race with deleteFileIfEmpty) — start fresh
+      if (e.code === "ENOENT") return;
+      // Corrupt JSON — start fresh
+      if (e instanceof SyntaxError) return;
+      // Unexpected errors (EACCES, etc.) — surface them
+      throw e;
+    }
   }
 
   /** Write store to disk atomically (file-backed mode only). */
@@ -90,8 +96,14 @@ export class TaskStore {
       tasks: Array.from(this.tasks.values()),
     };
     const tmpPath = this.filePath + ".tmp";
-    writeFileSync(tmpPath, JSON.stringify(data, null, 2));
-    renameSync(tmpPath, this.filePath);
+    try {
+      writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+      renameSync(tmpPath, this.filePath);
+    } catch (e) {
+      // Clean up orphaned temp file on write failure
+      try { unlinkSync(tmpPath); } catch { /* ignore */ }
+      throw e;
+    }
   }
 
   /** Execute a mutation with file locking (if file-backed). */
@@ -281,25 +293,23 @@ export class TaskStore {
     return true;
   }
 
-  /** Remove all completed tasks. */
+  /** Remove all completed tasks (single-pass). */
   clearCompleted(): number {
     return this.withLock(() => {
-      let count = 0;
+      // Collect completed IDs first
+      const completedIds = new Set<string>();
       for (const [id, task] of this.tasks) {
-        if (task.status === "completed") {
-          this.tasks.delete(id);
-          count++;
-        }
+        if (task.status === "completed") completedIds.add(id);
       }
-      // Clean up dependency edges for deleted tasks
-      if (count > 0) {
-        const validIds = new Set(this.tasks.keys());
-        for (const t of this.tasks.values()) {
-          t.blocks = t.blocks.filter(bid => validIds.has(bid));
-          t.blockedBy = t.blockedBy.filter(bid => validIds.has(bid));
-        }
+      if (completedIds.size === 0) return 0;
+
+      // Delete completed and clean edges on remaining tasks in one pass
+      for (const id of completedIds) this.tasks.delete(id);
+      for (const t of this.tasks.values()) {
+        t.blocks = t.blocks.filter(bid => !completedIds.has(bid));
+        t.blockedBy = t.blockedBy.filter(bid => !completedIds.has(bid));
       }
-      return count;
+      return completedIds.size;
     });
   }
 }
