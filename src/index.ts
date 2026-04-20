@@ -14,8 +14,9 @@
  *   /tasks       — Interactive task management menu
  */
 
+import { existsSync, mkdirSync, writeFileSync, renameSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { AutoClearManager } from "./auto-clear.js";
@@ -247,8 +248,22 @@ export default function (pi: ExtensionAPI) {
     if (taskScope === "session" && !piTasks) {
       const sessionId = ctx.sessionManager.getSessionId();
       const path = resolveStorePath(sessionId);
-      store = new TaskStore(path);
-      widget.setStore(store);
+      if (path) {
+        // Persist any in-memory tasks from the old (pre-session-ID) store to the
+        // new session-scoped file so they survive the store swap.
+        const oldTasks = store.list();
+        const newFileExists = existsSync(path);
+        if (oldTasks.length > 0 && !newFileExists) {
+          const tmpPath = path + ".tmp";
+          const maxId = Math.max(...oldTasks.map(t => parseInt(t.id, 10)), 0);
+          const data = { nextId: maxId + 1, tasks: oldTasks };
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+          renameSync(tmpPath, path);
+        }
+        store = new TaskStore(path);
+        widget.setStore(store);
+      }
     }
     storeUpgraded = true;
   }
@@ -357,6 +372,33 @@ export default function (pi: ExtensionAPI) {
 
     upgradeStoreIfNeeded(ctx);
     showPersistedTasks(isResume);
+  });
+
+  // ── Prompt execution end: auto-complete in_progress tasks ──
+  // agent_end fires when the LLM stops producing tool calls — meaning the
+  // LLM is done for this turn. Any tasks still in_progress at that point
+  // should be marked completed.
+  //
+  // We skip the very first agent_end of the session (which fires on startup
+  // before the user sends any message) via the isFirstAgentCycle guard —
+  // agent_start toggles it to false on the first real turn.
+  let isFirstAgentCycle = true;
+  pi.on("agent_start" as any, () => { isFirstAgentCycle = false; });
+
+  pi.on("agent_end" as any, async () => {
+    if (isFirstAgentCycle) return;
+
+    const updated: string[] = [];
+    for (const task of store.list()) {
+      if (task.status === "in_progress") {
+        store.update(task.id, { status: "completed" });
+        updated.push(task.id);
+      }
+    }
+    if (updated.length > 0) {
+      debug(`agent_end: auto-completed in_progress tasks ${updated.join(", ")}`);
+      widget.update();
+    }
   });
 
   // Keep latestCtx fresh on every tool execution as well.
