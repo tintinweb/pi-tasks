@@ -174,14 +174,17 @@ export class TaskWidget {
       if (anchorIndex < 0) this.visibleAnchorTaskId = undefined;
     }
 
-    if (anchorIndex < MAX_VISIBLE_TASKS) {
+    const hasLaterTask = anchorIndex >= 0 && anchorIndex < tasks.length - 1;
+    const reservedSlotsAfterAnchor = hasLaterTask ? 1 : 0;
+
+    if (anchorIndex < MAX_VISIBLE_TASKS - reservedSlotsAfterAnchor) {
       return {
         visibleStart: 0,
         visibleTasks: tasks.slice(0, MAX_VISIBLE_TASKS),
       };
     }
 
-    const targetStart = anchorIndex - MAX_VISIBLE_TASKS + 1;
+    const targetStart = anchorIndex - MAX_VISIBLE_TASKS + 1 + reservedSlotsAfterAnchor;
     let visibleStart = 0;
     while (visibleStart < targetStart && isTerminalStatus(tasks[visibleStart].status)) {
       visibleStart++;
@@ -218,6 +221,10 @@ export class TaskWidget {
     const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
     const { visibleStart, visibleTasks } = this.getVisibleTasks(tasks);
+
+    if (visibleStart > 0) {
+      lines.push(truncate(theme.fg("dim", `    … ${visibleStart} more above`)));
+    }
 
     for (const task of visibleTasks) {
       lines.push(truncate(this.renderTaskLine(task, taskMap, spinnerChar, theme)));
@@ -380,3 +387,4 @@ export class TaskWidget {
     this.cachedTasks = [];
   }
 }
+

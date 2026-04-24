@@ -159,7 +159,7 @@ describe("TaskWidget", () => {
     expect(ui.state.widgets.get("tasks")?.content).toBeUndefined();
   });
 
-  it("limits visible tasks to MAX_VISIBLE_TASKS", () => {
+  it("shows the bottom overflow message when more than 10 tasks exist", () => {
     for (let i = 0; i < 15; i++) {
       store.create(`Task ${i + 1}`, "Desc");
     }
@@ -168,7 +168,8 @@ describe("TaskWidget", () => {
     const lines = renderWidget(ui.state);
     // header + 10 tasks + "… and 5 more"
     expect(lines).toHaveLength(12);
-    expect(lines[11]).toContain("5 more");
+    expect(lines[11]).toBe("    … and 5 more");
+    expect(lines.some(line => line === "    … 1 more above")).toBe(false);
   });
 
   it("keeps completed tasks visible when the list still fits in the widget", () => {
@@ -209,7 +210,7 @@ describe("TaskWidget", () => {
     expect(lines[4]).toContain("#4 Task 4");
   });
 
-  it("rotates completed tasks out of view only when needed to reveal later tasks", () => {
+  it("shows a top overflow message and keeps the current plus next task visible after the window shifts", () => {
     for (let i = 0; i < 14; i++) {
       store.create(`Task ${i + 1}`, "Desc", `Working task ${i + 1}`);
     }
@@ -222,13 +223,15 @@ describe("TaskWidget", () => {
     widget.update();
 
     const lines = renderWidget(ui.state);
-    expect(lines).toHaveLength(12);
-    expect(lines[1]).toContain("#2 Task 2");
+    expect(lines).toHaveLength(13);
+    expect(lines[1]).toBe("    … 2 more above");
+    expect(lines[2]).toContain("#3 Task 3");
     expect(lines[9]).toContain("#10 Task 10");
     expect(lines[10]).toContain("Working task 11…");
-    expect(lines[11]).toContain("3 more");
+    expect(lines[11]).toContain("#12 Task 12");
+    expect(lines[12]).toBe("    … and 2 more");
     expect(lines.some(line => line.includes("#1 Task 1"))).toBe(false);
-    expect(lines.some(line => line.includes("#12 Task 12"))).toBe(false);
+    expect(lines.some(line => line.includes("#2 Task 2"))).toBe(false);
   });
 
   it("keeps the later task window stable after the active task completes", () => {
@@ -244,28 +247,36 @@ describe("TaskWidget", () => {
     widget.update();
 
     let lines = renderWidget(ui.state);
+    expect(lines[1]).toBe("    … 2 more above");
     expect(lines[10]).toContain("Working task 11…");
+    expect(lines[11]).toContain("#12 Task 12");
     expect(lines.some(line => line.includes("#1 Task 1"))).toBe(false);
+    expect(lines.some(line => line.includes("#2 Task 2"))).toBe(false);
 
     widget.setActiveTask("11", false);
     store.update("11", { status: "completed" });
     widget.update();
 
     lines = renderWidget(ui.state);
+    expect(lines[1]).toBe("    … 2 more above");
     expect(lines.some(line => line.includes("#1 Task 1"))).toBe(false);
-    expect(lines.some(line => line.includes("#2 Task 2"))).toBe(true);
+    expect(lines.some(line => line.includes("#2 Task 2"))).toBe(false);
+    expect(lines.some(line => line.includes("#3 Task 3"))).toBe(true);
     expect(lines.some(line => line.includes("#11 Task 11"))).toBe(true);
-    expect(lines.some(line => line.includes("#12 Task 12"))).toBe(false);
+    expect(lines.some(line => line.includes("#12 Task 12"))).toBe(true);
 
     store.update("12", { status: "in_progress" });
     widget.setActiveTask("12", true);
     widget.update();
 
     lines = renderWidget(ui.state);
+    expect(lines[1]).toBe("    … 3 more above");
     expect(lines.some(line => line.includes("#1 Task 1"))).toBe(false);
     expect(lines.some(line => line.includes("#2 Task 2"))).toBe(false);
+    expect(lines.some(line => line.includes("#3 Task 3"))).toBe(false);
     expect(lines.some(line => line.includes("#11 Task 11"))).toBe(true);
     expect(lines.some(line => line.includes("Working task 12…"))).toBe(true);
+    expect(lines.at(-1)).toBe("    … and 1 more");
   });
 
   it("tracks token usage for active tasks", () => {
