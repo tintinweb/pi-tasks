@@ -430,24 +430,78 @@ export default function (pi: ExtensionAPI) {
 
   eventUnsubs.push(pi.events.on("tasks:rpc:update", (payload: unknown) => {
     const p = payload as Record<string, unknown> | undefined;
-    if (!p || typeof p.requestId !== "string" || typeof p.taskId !== "string") return;
+    if (!p || typeof p.requestId !== "string") return;
     const requestId = p.requestId;
-    const taskId = p.taskId;
-    const fields = (p.fields ?? {}) as {
-      status?: TaskStatus | "deleted";
-      subject?: string;
-      description?: string;
-      activeForm?: string;
-      owner?: string;
-      metadata?: Record<string, any>;
-      addBlocks?: string[];
-      addBlockedBy?: string[];
+
+    const extractUpdateFields = (raw: Record<string, unknown>) => {
+      if (raw.fields && typeof raw.fields === "object") {
+        return raw.fields as {
+          status?: TaskStatus | "deleted";
+          subject?: string;
+          description?: string;
+          activeForm?: string;
+          owner?: string;
+          metadata?: Record<string, any>;
+          addBlocks?: string[];
+          addBlockedBy?: string[];
+        };
+      }
+
+      const { requestId: _requestId, taskId: _taskId, tasks: _tasks, fields: _fields, ...directFields } = raw;
+      return directFields as {
+        status?: TaskStatus | "deleted";
+        subject?: string;
+        description?: string;
+        activeForm?: string;
+        owner?: string;
+        metadata?: Record<string, any>;
+        addBlocks?: string[];
+        addBlockedBy?: string[];
+      };
     };
 
     try {
-      const result = store.update(taskId, fields);
+      if (Array.isArray(p.tasks)) {
+        const updatedIds: string[] = [];
+        const missingIds: string[] = [];
+        const rpcWarnings: string[] = [];
+
+        for (const rawTask of p.tasks as Array<Record<string, unknown>>) {
+          if (!rawTask || typeof rawTask.taskId !== "string") {
+            throw new Error("taskId is required for each batch update");
+          }
+
+          const result = updateSingleTask({
+            taskId: rawTask.taskId,
+            ...extractUpdateFields(rawTask),
+          });
+
+          if (result.changedFields.length === 0 && !result.task) missingIds.push(rawTask.taskId);
+          else updatedIds.push(rawTask.taskId);
+          rpcWarnings.push(...result.warnings);
+        }
+
+        persistSessionStateAndUpdateWidget();
+        pi.events.emit(`tasks:rpc:update:reply:${requestId}`, {
+          success: missingIds.length === 0,
+          ids: updatedIds,
+          ...(missingIds.length > 0 && { missingIds }),
+          ...(rpcWarnings.length > 0 && { warnings: rpcWarnings }),
+        });
+        return;
+      }
+
+      if (typeof p.taskId !== "string") return;
+      const result = updateSingleTask({
+        taskId: p.taskId,
+        ...extractUpdateFields(p),
+      });
+
       persistSessionStateAndUpdateWidget();
-      pi.events.emit(`tasks:rpc:update:reply:${requestId}`, { success: !!result.task });
+      pi.events.emit(`tasks:rpc:update:reply:${requestId}`, {
+        success: !!result.task,
+        ...(result.warnings.length > 0 && { warnings: result.warnings }),
+      });
     } catch (err: any) {
       pi.events.emit(`tasks:rpc:update:reply:${requestId}`, { error: err.message });
     }
@@ -886,10 +940,82 @@ Returns full task details:
   // Tool 4: TaskUpdate
   // ──────────────────────────────────────────────────
 
+  const taskUpdateFieldSchema = {
+    status: Type.Optional(Type.Unsafe<"pending" | "in_progress" | "completed" | "skipped" | "deleted">({
+      anyOf: [
+        { type: "string", enum: ["pending", "in_progress", "completed", "skipped"] },
+        { type: "string", const: "deleted" },
+      ],
+      description: "New status for the task",
+    })),
+    subject: Type.Optional(Type.String({ description: "New subject for the task" })),
+    description: Type.Optional(Type.String({ description: "New description for the task" })),
+    activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress" })),
+    owner: Type.Optional(Type.String({ description: "New owner for the task" })),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Metadata keys to merge into the task. Set a key to null to delete it." })),
+    addBlocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks" })),
+    addBlockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task" })),
+  };
+
+  const taskUpdateItemSchema = Type.Object({
+    taskId: Type.String({ description: "The ID of the task to update" }),
+    ...taskUpdateFieldSchema,
+  });
+
+  type TaskUpdateFields = Parameters<TaskStoreLike["update"]>[1];
+  type TaskUpdateResult = ReturnType<TaskStoreLike["update"]>;
+
+  function applyTaskUpdateEffects(taskId: string, fields: TaskUpdateFields) {
+    if (fields.status === "in_progress") {
+      widget.setActiveTask(taskId);
+      autoClear.resetBatchCountdown();
+    } else if (fields.status === "pending") {
+      autoClear.resetBatchCountdown();
+    } else if ((fields.status && isTerminalStatus(fields.status)) || fields.status === "deleted") {
+      widget.setActiveTask(taskId, false);
+      if (fields.status === "completed") autoClear.trackCompletion(taskId, currentTurn);
+    }
+  }
+
+  function updateSingleTask(params: { taskId: string } & TaskUpdateFields) {
+    const { taskId, ...rest } = params;
+    const fields: TaskUpdateFields = rest;
+    const result = store.update(taskId, fields);
+
+    if (result.changedFields.length > 0 || result.task) {
+      applyTaskUpdateEffects(taskId, fields);
+    }
+
+    return { taskId, ...result };
+  }
+
+  function formatTaskUpdateResult(
+    taskId: string,
+    task: TaskUpdateResult["task"],
+    changedFields: string[],
+    warnings: string[],
+  ) {
+    if (changedFields.length === 0 && !task) {
+      return `Task #${taskId} not found`;
+    }
+
+    let msg = `Updated task #${taskId}`;
+    if (changedFields.length > 0) {
+      msg += ` ${changedFields.join(", ")}`;
+    }
+    if (warnings.length > 0) {
+      msg += ` (warning: ${warnings.join("; ")})`;
+    }
+    return msg;
+  }
+
   pi.registerTool({
     name: "TaskUpdate",
     label: "TaskUpdate",
-    description: `Use this tool to update a task in the task list.
+    description: `Use this tool to update one or more tasks in the task list.
+
+Single mode: pass taskId directly.
+Batch mode: pass a tasks array.
 
 ## When to Use This Tool
 
@@ -966,50 +1092,43 @@ Claim a task by setting owner:
 Set up task dependencies:
 \`\`\`json
 {"taskId": "2", "addBlockedBy": ["1"]}
+\`\`\`
+
+Batch update several tasks at once:
+\`\`\`json
+{"tasks": [{"taskId": "1", "status": "completed"}, {"taskId": "2", "owner": "my-name"}]}
 \`\`\``,
     parameters: Type.Object({
-      taskId: Type.String({ description: "The ID of the task to update" }),
-      status: Type.Optional(Type.Unsafe<"pending" | "in_progress" | "completed" | "skipped" | "deleted">({
-        anyOf: [
-          { type: "string", enum: ["pending", "in_progress", "completed", "skipped"] },
-          { type: "string", const: "deleted" },
-        ],
-        description: "New status for the task",
-      })),
-      subject: Type.Optional(Type.String({ description: "New subject for the task" })),
-      description: Type.Optional(Type.String({ description: "New description for the task" })),
-      activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress" })),
-      owner: Type.Optional(Type.String({ description: "New owner for the task" })),
-      metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Metadata keys to merge into the task. Set a key to null to delete it." })),
-      addBlocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks" })),
-      addBlockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task" })),
+      taskId: Type.Optional(Type.String({ description: "The ID of the task to update" })),
+      ...taskUpdateFieldSchema,
+      tasks: Type.Optional(Type.Array(taskUpdateItemSchema, { description: "Batch update tasks" })),
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const { taskId, ...fields } = params;
-      const { task, changedFields, warnings } = store.update(taskId, fields);
+      if (params.tasks) {
+        if (params.tasks.length === 0) {
+          return Promise.resolve(textResult("Updated 0 task(s).", makeToolResultDetails()));
+        }
 
-      if (changedFields.length === 0 && !task) {
-        return Promise.resolve(textResult(`Task #${taskId} not found`, makeToolResultDetails()));
+        const messages = params.tasks.map(taskParams => {
+          const result = updateSingleTask(taskParams);
+          return formatTaskUpdateResult(result.taskId, result.task, result.changedFields, result.warnings);
+        });
+
+        widget.update();
+        return Promise.resolve(textResult(`Processed ${params.tasks.length} task(s):\n${messages.join("\n")}`, makeToolResultDetails()));
       }
 
-      // Update widget active task tracking
-      if (fields.status === "in_progress") {
-        widget.setActiveTask(taskId);
-        autoClear.resetBatchCountdown();
-      } else if (fields.status === "pending") {
-        autoClear.resetBatchCountdown();
-      } else if ((fields.status && isTerminalStatus(fields.status)) || fields.status === "deleted") {
-        widget.setActiveTask(taskId, false);
-        if (fields.status === "completed") autoClear.trackCompletion(taskId, currentTurn);
+      if (!params.taskId) {
+        return Promise.resolve(textResult("Error: taskId is required (or provide a tasks array for batch mode)", makeToolResultDetails()));
       }
 
+      const result = updateSingleTask(params as Parameters<typeof updateSingleTask>[0]);
       widget.update();
-      let msg = `Updated task #${taskId} ${changedFields.join(", ")}`;
-      if (warnings.length > 0) {
-        msg += ` (warning: ${warnings.join("; ")})`;
-      }
-      return Promise.resolve(textResult(msg, makeToolResultDetails()));
+      return Promise.resolve(textResult(
+        formatTaskUpdateResult(result.taskId, result.task, result.changedFields, result.warnings),
+        makeToolResultDetails(),
+      ));
     },
   });
 
