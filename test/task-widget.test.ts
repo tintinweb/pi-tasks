@@ -171,6 +171,66 @@ describe("TaskWidget", () => {
     expect(lines[11]).toContain("5 more");
   });
 
+  it("keeps completed tasks visible when the list still fits in the widget", () => {
+    store.create("Task 1", "Desc");
+    store.create("Task 2", "Desc", "Working task 2");
+    store.create("Task 3", "Desc");
+    store.create("Task 4", "Desc");
+
+    store.update("1", { status: "completed" });
+    store.update("2", { status: "in_progress" });
+    widget.setActiveTask("2", true);
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines).toHaveLength(5);
+    expect(lines[1]).toContain("#1 Task 1");
+    expect(lines[2]).toContain("#2");
+    expect(lines[3]).toContain("#3 Task 3");
+    expect(lines[4]).toContain("#4 Task 4");
+    expect(lines.some(line => line.includes(" completed"))).toBe(false);
+  });
+
+  it("preserves task sequence instead of moving the in-progress task to the end", () => {
+    store.create("Task 1", "Desc");
+    store.create("Task 2", "Desc", "Working task 2");
+    store.create("Task 3", "Desc");
+    store.create("Task 4", "Desc");
+
+    store.update("1", { status: "completed" });
+    store.update("2", { status: "in_progress" });
+    widget.setActiveTask("2", true);
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("#1 Task 1");
+    expect(lines[2]).toContain("Working task 2…");
+    expect(lines[3]).toContain("#3 Task 3");
+    expect(lines[4]).toContain("#4 Task 4");
+  });
+
+  it("rotates completed tasks out of view only when needed to reveal later tasks", () => {
+    for (let i = 0; i < 14; i++) {
+      store.create(`Task ${i + 1}`, "Desc", `Working task ${i + 1}`);
+    }
+
+    for (let i = 1; i <= 10; i++) {
+      store.update(String(i), { status: "completed" });
+    }
+    store.update("11", { status: "in_progress" });
+    widget.setActiveTask("11", true);
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines).toHaveLength(12);
+    expect(lines[1]).toContain("#2 Task 2");
+    expect(lines[9]).toContain("#10 Task 10");
+    expect(lines[10]).toContain("Working task 11…");
+    expect(lines[11]).toContain("3 more");
+    expect(lines.some(line => line.includes("#1 Task 1"))).toBe(false);
+    expect(lines.some(line => line.includes("#12 Task 12"))).toBe(false);
+  });
+
   it("tracks token usage for active tasks", () => {
     store.create("Active task", "Desc", "Running");
     store.update("1", { status: "in_progress" });

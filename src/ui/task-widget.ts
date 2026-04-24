@@ -149,6 +149,37 @@ export class TaskWidget {
     }
   }
 
+  private getVisibleTasks(tasks: import("../types.js").Task[]): {
+    visibleStart: number;
+    visibleTasks: import("../types.js").Task[];
+  } {
+    if (tasks.length <= MAX_VISIBLE_TASKS) {
+      return { visibleStart: 0, visibleTasks: tasks };
+    }
+
+    const furthestInProgressIndex = tasks.reduce((furthest, task, index) => {
+      return task.status === "in_progress" ? index : furthest;
+    }, -1);
+
+    if (furthestInProgressIndex < MAX_VISIBLE_TASKS) {
+      return {
+        visibleStart: 0,
+        visibleTasks: tasks.slice(0, MAX_VISIBLE_TASKS),
+      };
+    }
+
+    const targetStart = furthestInProgressIndex - MAX_VISIBLE_TASKS + 1;
+    let visibleStart = 0;
+    while (visibleStart < targetStart && isTerminalStatus(tasks[visibleStart].status)) {
+      visibleStart++;
+    }
+
+    return {
+      visibleStart,
+      visibleTasks: tasks.slice(visibleStart, visibleStart + MAX_VISIBLE_TASKS),
+    };
+  }
+
   /** Build widget lines from cached state. Called from the render callback. */
   private renderWidget(tui: any, theme: Theme): string[] {
     const tasks = this.cachedTasks;
@@ -163,8 +194,6 @@ export class TaskWidget {
     const skipped = tasks.filter(t => t.status === "skipped");
     const inProgress = tasks.filter(t => t.status === "in_progress");
     const pending = tasks.filter(t => t.status === "pending");
-    const activeTasks = [...pending, ...inProgress];
-    const terminalTasks = [...completed, ...skipped];
 
     const parts: string[] = [];
     if (completed.length > 0) parts.push(`${completed.length} done`);
@@ -175,24 +204,15 @@ export class TaskWidget {
 
     const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
-
-    const collapseTerminal = activeTasks.length >= 3 && terminalTasks.length > 0;
-    const visibleTasks = collapseTerminal ? activeTasks.slice(0, MAX_VISIBLE_TASKS) : tasks.slice(0, MAX_VISIBLE_TASKS);
+    const { visibleStart, visibleTasks } = this.getVisibleTasks(tasks);
 
     for (const task of visibleTasks) {
       lines.push(truncate(this.renderTaskLine(task, taskMap, spinnerChar, theme)));
     }
 
-    if (collapseTerminal) {
-      const summaryParts: string[] = [];
-      if (completed.length > 0) summaryParts.push(`${completed.length} completed`);
-      if (skipped.length > 0) summaryParts.push(`${skipped.length} skipped`);
-      lines.push(truncate(theme.fg("dim", `    ${summaryParts.join(", ")}`)));
-    }
-
-    const totalAvailable = collapseTerminal ? activeTasks.length : tasks.length;
-    if (visibleTasks.length < totalAvailable) {
-      lines.push(truncate(theme.fg("dim", `    … and ${totalAvailable - visibleTasks.length} more`)));
+    const hiddenAfterVisibleWindow = tasks.length - visibleStart - visibleTasks.length;
+    if (hiddenAfterVisibleWindow > 0) {
+      lines.push(truncate(theme.fg("dim", `    … and ${hiddenAfterVisibleWindow} more`)));
     }
 
     return lines;
