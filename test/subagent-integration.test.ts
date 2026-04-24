@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
+import { buildTaskSessionStateDetails, SessionStateTaskStore, TASKS_SESSION_STATE_TYPE } from "../src/session-state-store.js";
 import { TaskStore } from "../src/task-store.js";
 import { TaskWidget, type Theme, type UICtx } from "../src/ui/task-widget.js";
 
@@ -74,15 +75,21 @@ function mockPi() {
 }
 
 /** Minimal mock ExtensionContext. */
-function mockCtx() {
+function mockCtx(overrides: Record<string, any> = {}) {
   return {
     model: { id: "test-model", name: "Test" },
     modelRegistry: {},
-    ui: {
+    ui: overrides.ui ?? {
       setWidget: vi.fn(),
       setStatus: vi.fn(),
       notify: vi.fn(),
     },
+    sessionManager: overrides.sessionManager ?? {
+      getBranch: () => [],
+      getSessionId: () => "test-session",
+      getSessionFile: () => "/tmp/test-session.jsonl",
+    },
+    ...overrides,
   };
 }
 
@@ -903,6 +910,48 @@ describe("Protocol version mismatch", () => {
     const ctx2 = mockCtx();
     await mock.fireLifecycle("before_agent_start", {}, ctx2);
     expect(ctx2.ui.notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("Session-state resume", () => {
+  it("preserves completed persisted tasks on session_start resume", async () => {
+    delete process.env.PI_TASKS;
+
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    const persisted = new SessionStateTaskStore();
+    for (let i = 0; i < 14; i++) {
+      persisted.create(`Task ${i + 1}`, "Desc");
+      persisted.update(String(i + 1), { status: "completed" });
+    }
+
+    const ctx = mockCtx({
+      sessionManager: {
+        getBranch: () => [
+          {
+            type: "custom",
+            customType: TASKS_SESSION_STATE_TYPE,
+            data: buildTaskSessionStateDetails(persisted),
+          },
+        ],
+        getSessionId: () => "resume-session",
+        getSessionFile: () => "/tmp/resume-session.jsonl",
+      },
+    });
+
+    await mock.fireLifecycle("session_start", { reason: "resume", previousSessionFile: "/tmp/previous-session.jsonl" }, ctx);
+    await mock.fireLifecycle("before_agent_start", {}, ctx);
+
+    const listResult = await mock.executeTool("TaskList", {}, ctx);
+    expect(listResult.content[0].text).toContain("#1 [completed] Task 1");
+    expect(listResult.content[0].text).toContain("#14 [completed] Task 14");
+
+    const createResult = await mock.executeTool("TaskCreate", {
+      subject: "Task 15",
+      description: "Created after resume",
+    }, ctx);
+    expect(createResult.content[0].text).toContain("Task #15: Task 15");
   });
 });
 
