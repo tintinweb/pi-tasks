@@ -31,7 +31,7 @@ import {
 import { resolveTaskStorePath } from "./storage-paths.js";
 import { TaskStore, type TaskStoreLike } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
-import { isTerminalStatus, type TaskBudget, type TaskStatus } from "./types.js";
+import { isTerminalStatus, type Task, type TaskBudget, type TaskStatus } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
 
@@ -965,6 +965,20 @@ Returns full task details:
   type TaskUpdateFields = Parameters<TaskStoreLike["update"]>[1];
   type TaskUpdateResult = ReturnType<TaskStoreLike["update"]>;
 
+  function cloneTask(task: Task | undefined): Task | undefined {
+    if (!task) return undefined;
+    return {
+      ...task,
+      metadata: { ...task.metadata },
+      blocks: [...task.blocks],
+      blockedBy: [...task.blockedBy],
+    };
+  }
+
+  function formatTaskIdList(ids: string[] | undefined) {
+    return ids && ids.length > 0 ? `[${ids.map(id => `#${id}`).join(", ")}]` : "[]";
+  }
+
   function applyTaskUpdateEffects(taskId: string, fields: TaskUpdateFields) {
     if (fields.status === "in_progress") {
       widget.setActiveTask(taskId);
@@ -980,17 +994,49 @@ Returns full task details:
   function updateSingleTask(params: { taskId: string } & TaskUpdateFields) {
     const { taskId, ...rest } = params;
     const fields: TaskUpdateFields = rest;
+    const previousTask = cloneTask(store.get(taskId));
     const result = store.update(taskId, fields);
+    const task = cloneTask(result.task ?? store.get(taskId));
 
     if (result.changedFields.length > 0 || result.task) {
       applyTaskUpdateEffects(taskId, fields);
     }
 
-    return { taskId, ...result };
+    return { ...result, taskId, previousTask, task };
+  }
+
+  function formatTaskFieldUpdate(
+    field: string,
+    previousTask: Task | undefined,
+    task: Task | undefined,
+  ) {
+    switch (field) {
+      case "status":
+        return `status: ${previousTask?.status ?? "missing"} → ${task?.status ?? "deleted"}`;
+      case "subject":
+        return `subject: ${JSON.stringify(previousTask?.subject ?? "")} → ${JSON.stringify(task?.subject ?? "")}`;
+      case "description":
+        return "description updated";
+      case "activeForm":
+        return `activeForm: ${previousTask?.activeForm ?? "none"} → ${task?.activeForm ?? "none"}`;
+      case "owner":
+        return `owner: ${previousTask?.owner ?? "none"} → ${task?.owner ?? "none"}`;
+      case "metadata":
+        return "metadata updated";
+      case "blocks":
+        return `blocks: ${formatTaskIdList(previousTask?.blocks)} → ${formatTaskIdList(task?.blocks)}`;
+      case "blockedBy":
+        return `blockedBy: ${formatTaskIdList(previousTask?.blockedBy)} → ${formatTaskIdList(task?.blockedBy)}`;
+      case "deleted":
+        return `status: ${previousTask?.status ?? "missing"} → deleted`;
+      default:
+        return field;
+    }
   }
 
   function formatTaskUpdateResult(
     taskId: string,
+    previousTask: Task | undefined,
     task: TaskUpdateResult["task"],
     changedFields: string[],
     warnings: string[],
@@ -999,9 +1045,12 @@ Returns full task details:
       return `Task #${taskId} not found`;
     }
 
-    let msg = `Updated task #${taskId}`;
-    if (changedFields.length > 0) {
-      msg += ` ${changedFields.join(", ")}`;
+    const details = changedFields.map(field => formatTaskFieldUpdate(field, previousTask, task));
+    let msg = changedFields.length === 1 && changedFields[0] === "deleted"
+      ? `Deleted task #${taskId}`
+      : `Updated task #${taskId}`;
+    if (details.length > 0) {
+      msg += ` ${details.join("; ")}`;
     }
     if (warnings.length > 0) {
       msg += ` (warning: ${warnings.join("; ")})`;
@@ -1112,7 +1161,7 @@ Batch update several tasks at once:
 
         const messages = params.tasks.map(taskParams => {
           const result = updateSingleTask(taskParams);
-          return formatTaskUpdateResult(result.taskId, result.task, result.changedFields, result.warnings);
+          return formatTaskUpdateResult(result.taskId, result.previousTask, result.task, result.changedFields, result.warnings);
         });
 
         widget.update();
@@ -1126,7 +1175,7 @@ Batch update several tasks at once:
       const result = updateSingleTask(params as Parameters<typeof updateSingleTask>[0]);
       widget.update();
       return Promise.resolve(textResult(
-        formatTaskUpdateResult(result.taskId, result.task, result.changedFields, result.warnings),
+        formatTaskUpdateResult(result.taskId, result.previousTask, result.task, result.changedFields, result.warnings),
         makeToolResultDetails(),
       ));
     },

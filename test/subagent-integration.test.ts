@@ -498,7 +498,8 @@ describe("Standalone operation (no subagents extension)", () => {
 
   it("TaskUpdate works without subagents", async () => {
     await mock.executeTool("TaskCreate", { subject: "Update me", description: "desc" });
-    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    const update = await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    expect(update.content[0].text).toContain("Updated task #1 status: pending → in_progress");
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("in_progress");
   });
@@ -515,8 +516,8 @@ describe("Standalone operation (no subagents extension)", () => {
     });
 
     expect(result.content[0].text).toContain("Processed 2 task(s)");
-    expect(result.content[0].text).toContain("Updated task #1 status");
-    expect(result.content[0].text).toContain("Updated task #2 owner, blockedBy");
+    expect(result.content[0].text).toContain("Updated task #1 status: pending → in_progress");
+    expect(result.content[0].text).toContain("Updated task #2 owner: none → agent-2; blockedBy: [] → [#1]");
 
     const first = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(first.content[0].text).toContain("in_progress");
@@ -536,7 +537,7 @@ describe("Standalone operation (no subagents extension)", () => {
       ],
     });
 
-    expect(result.content[0].text).toContain("Updated task #1 status");
+    expect(result.content[0].text).toContain("Updated task #1 status: pending → completed");
     expect(result.content[0].text).toContain("Task #999 not found");
   });
 

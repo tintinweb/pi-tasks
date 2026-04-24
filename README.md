@@ -147,14 +147,14 @@ Update one or more tasks' fields, status, metadata, and dependencies.
 | `tasks` | array | Array of task update objects (same fields as single mode) |
 
 ```
-→ Updated task #1 status
-→ Updated task #2 owner, status
-→ Updated task #3 blocks
-→ Updated task #3 blocks (warning: cycle: #3 → #1 creates a dependency cycle)
-→ Updated task #1 deleted
+→ Updated task #1 status: pending → in_progress
+→ Updated task #2 owner: none → agent-2; status: pending → completed
+→ Updated task #3 blocks: [] → [#1]
+→ Updated task #3 blocks: [] → [#1] (warning: cycle: #3 → #1 creates a dependency cycle)
+→ Deleted task #1 status: pending → deleted
 → Processed 2 task(s):
-  Updated task #1 status
-  Updated task #2 owner
+  Updated task #1 status: in_progress → completed
+  Updated task #2 owner: none → my-name
 ```
 
 Setting `status: "deleted"` permanently removes the task.
