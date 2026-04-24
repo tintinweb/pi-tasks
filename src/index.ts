@@ -515,6 +515,7 @@ export default function (pi: ExtensionAPI) {
   // or tool_execution_start — whichever fires first).
   let storeUpgraded = false;
   let persistedTasksShown = false;
+  let preservePersistedTasksOnShow = false;
   function upgradeStoreIfNeeded(ctx: ExtensionContext) {
     if (storeUpgraded) return;
     if (isSessionStateBackend()) {
@@ -534,22 +535,22 @@ export default function (pi: ExtensionAPI) {
 
   let pendingOrphanReminder: string | undefined;
 
-  /** Restore widget on session start/resume if there's unfinished work.
-   *  On new sessions, auto-clear if all tasks are completed (clean slate).
-   *  On resume, always show tasks (user may want to review).
+  /** Restore persisted task state.
+   *  On fresh/new sessions, auto-clear if all tasks are completed (clean slate).
+   *  On resume/startup/reload/fork/tree, preserve persisted tasks so users can review them.
    *  Only runs once — the first caller wins. */
-  function showPersistedTasks(isResume = false) {
+  function showPersistedTasks(preservePersistedTasks = preservePersistedTasksOnShow) {
     if (persistedTasksShown) return;
     persistedTasksShown = true;
     const tasks = store.list();
     if (tasks.length > 0) {
-      if (!isResume && tasks.every(t => isTerminalStatus(t.status))) {
+      if (!preservePersistedTasks && tasks.every(t => isTerminalStatus(t.status))) {
         store.clearCompleted();
         if (!isSessionStateBackend() && getTaskScope() === "session") store.deleteFileIfEmpty();
         persistSessionStateAndUpdateWidget();
       } else {
         widget.update();
-        if (isResume) {
+        if (preservePersistedTasks) {
           const orphanIds = tasks.filter(t => t.status === "in_progress").map(t => `#${t.id}`);
           if (orphanIds.length > 0) {
             pendingOrphanReminder = `<system-reminder>Session resumed. The following tasks were in_progress and may need attention (their agents are no longer running): ${orphanIds.join(", ")}. Consider completing, skipping, or restarting them.</system-reminder>`;
@@ -645,12 +646,13 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event: any, ctx) => {
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
     applyConfiguredStorageSettings();
     storeUpgraded = false;
     persistedTasksShown = false;
+    preservePersistedTasksOnShow = event?.reason !== "new";
     widget.resetActivity();
     upgradeStoreIfNeeded(ctx);
     showPersistedTasks();
@@ -661,9 +663,10 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui as UICtx);
     storeUpgraded = false;
     persistedTasksShown = false;
+    preservePersistedTasksOnShow = true;
     widget.resetActivity();
     upgradeStoreIfNeeded(ctx);
-    showPersistedTasks(true);
+    showPersistedTasks();
   });
 
   pi.on("session_tree", async (_event, ctx) => {
@@ -671,9 +674,10 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui as UICtx);
     storeUpgraded = false;
     persistedTasksShown = false;
+    preservePersistedTasksOnShow = true;
     widget.resetActivity();
     upgradeStoreIfNeeded(ctx);
-    showPersistedTasks(true);
+    showPersistedTasks();
   });
 
   // session_switch fires on /new (reason: "new") and /resume (reason: "resume").
@@ -689,6 +693,7 @@ export default function (pi: ExtensionAPI) {
     // Reset session-scoped state for both /new and /resume
     storeUpgraded = false;
     persistedTasksShown = false;
+    preservePersistedTasksOnShow = isResume;
     currentTurn = 0;
     lastTaskToolUseTurn = 0;
     reminderInjectedThisCycle = false;
@@ -701,7 +706,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     upgradeStoreIfNeeded(ctx);
-    showPersistedTasks(isResume);
+    showPersistedTasks();
   });
 
   // Keep latestCtx fresh on every tool execution as well.
