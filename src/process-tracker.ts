@@ -8,10 +8,13 @@
 import type { ChildProcess } from "node:child_process";
 import type { BackgroundProcess } from "./types.js";
 
+const MAX_OUTPUT_BYTES = 1_048_576; // 1 MB
+
 export interface ProcessOutput {
   output: string;
   status: BackgroundProcess["status"];
   exitCode?: number;
+  signal?: string;
   startedAt: number;
   completedAt?: number;
   command?: string;
@@ -19,14 +22,16 @@ export interface ProcessOutput {
 
 export class ProcessTracker {
   private processes = new Map<string, BackgroundProcess>();
+  private outputCache = new Map<string, string>();
 
   /** Register a spawned process for a task. */
   track(taskId: string, proc: ChildProcess, command?: string): void {
     const bp: BackgroundProcess = {
       taskId,
-      pid: proc.pid!,
+      pid: proc.pid ?? -1,
       command,
       output: [],
+      totalBytes: 0,
       status: "running",
       startedAt: Date.now(),
       proc,
@@ -34,24 +39,33 @@ export class ProcessTracker {
       waiters: [],
     };
 
-    // Buffer stdout
+    const appendOutput = (chunk: Buffer) => {
+      const str = chunk.toString();
+      const byteLen = Buffer.byteLength(str);
+      bp.totalBytes += byteLen;
+      bp.output.push(str);
+      this.outputCache.delete(taskId);
+      while (bp.totalBytes > MAX_OUTPUT_BYTES && bp.output.length > 1) {
+        const removed = bp.output.shift()!;
+        bp.totalBytes -= Buffer.byteLength(removed);
+      }
+    };
+
     proc.stdout?.on("data", (data: Buffer) => {
-      bp.output.push(data.toString());
+      appendOutput(data);
     });
 
-    // Buffer stderr
     proc.stderr?.on("data", (data: Buffer) => {
-      bp.output.push(data.toString());
+      appendOutput(data);
     });
 
-    // Handle process exit
-    proc.on("close", (code, _signal) => {
+    proc.on("close", (code, signal) => {
       if (bp.status === "running") {
         bp.status = code === 0 ? "completed" : "error";
       }
       bp.exitCode = code ?? undefined;
+      bp.signal = signal ?? undefined;
       bp.completedAt = Date.now();
-      // Notify all waiters
       for (const resolve of bp.waiters) resolve();
       bp.waiters = [];
     });
@@ -59,7 +73,7 @@ export class ProcessTracker {
     proc.on("error", (err) => {
       if (bp.status === "running") {
         bp.status = "error";
-        bp.output.push(`Process error: ${err.message}`);
+        appendOutput(Buffer.from(`Process error: ${err.message}`));
         bp.completedAt = Date.now();
         for (const resolve of bp.waiters) resolve();
         bp.waiters = [];
@@ -73,10 +87,16 @@ export class ProcessTracker {
   getOutput(taskId: string): ProcessOutput | undefined {
     const bp = this.processes.get(taskId);
     if (!bp) return undefined;
+    let cached = this.outputCache.get(taskId);
+    if (cached === undefined) {
+      cached = bp.output.join("");
+      this.outputCache.set(taskId, cached);
+    }
     return {
-      output: bp.output.join(""),
+      output: cached,
       status: bp.status,
       exitCode: bp.exitCode,
+      signal: bp.signal,
       startedAt: bp.startedAt,
       completedAt: bp.completedAt,
       command: bp.command,
@@ -97,6 +117,7 @@ export class ProcessTracker {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        signal?.removeEventListener("abort", finish);
         resolve(self.getOutput(taskId));
       }
 
@@ -136,5 +157,25 @@ export class ProcessTracker {
   /** Get the process record for a task. */
   getProcess(taskId: string): BackgroundProcess | undefined {
     return this.processes.get(taskId);
+  }
+
+  /** Remove a completed/error/stopped process from tracking. */
+  remove(taskId: string): boolean {
+    const bp = this.processes.get(taskId);
+    if (!bp || bp.status === "running") return false;
+    this.processes.delete(taskId);
+    this.outputCache.delete(taskId);
+    return true;
+  }
+
+  /** Kill all running processes and clear tracking state. */
+  dispose(): void {
+    for (const [, bp] of this.processes) {
+      if (bp.status === "running") {
+        try { bp.proc.kill("SIGTERM"); } catch { /* ignore */ }
+      }
+    }
+    this.processes.clear();
+    this.outputCache.clear();
   }
 }

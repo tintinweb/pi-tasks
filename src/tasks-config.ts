@@ -11,6 +11,7 @@ export interface TasksConfig {
   taskScope?: "memory" | "session" | "project";  // default: "session"
   taskStorageLocation?: TaskStorageLocation;  // default: "local"
   autoCascade?: boolean;   // default: false
+  nudgeInterval?: number;  // default: 4 (0 = disabled)
   autoClearCompleted?: "never" | "on_list_complete" | "on_task_complete";  // default: "on_list_complete"
 }
 
@@ -18,8 +19,13 @@ const CONFIG_PATH = join(process.cwd(), ".pi", "tasks-config.json");
 
 export function loadTasksConfig(): TasksConfig {
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
-  } catch { return {}; }
+    const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+    return raw as TasksConfig;
+  } catch (e: any) {
+    if (e.code === "ENOENT" || e instanceof SyntaxError) return {};
+    throw e;
+  }
 }
 
 export function saveTasksConfig(config: TasksConfig): void {

@@ -17,11 +17,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `session_state`: stores task state inside Pi session history instead of external files
   - Reconstructs the current task list from the active branch, following Pi’s official state-management pattern from the `todo.ts` example
   - Applies to task tool mutations and non-tool mutations (`/tasks` UI actions, auto-clear, subagent lifecycle updates)
+- **Skipped task status** — tasks can now be marked `skipped`, which counts as a resolved/terminal state for dependency unblocking and cleanup
+- **Enhanced `TaskCreate`** — now supports batch creation via `tasks`, dependency wiring at creation time (`blockedBy` / `blocks`), optional initial `in_progress` status, and an explicit `clearCompleted` flag
+- **Task execution budgets/timeouts** — `TaskExecute` now accepts `token_budget` and `timeout_ms`; timeouts auto-complete the task and emit a stop RPC, while token budgets are tracked best-effort for display
+- **Task RPC API** — new `tasks:rpc:ping`, `tasks:rpc:createMany`, `tasks:rpc:update`, and `tasks:ready` event-bus handlers for cross-extension task integration
+- **Nudge interval setting** — new `nudgeInterval` config controls reminder cadence; `0` disables nudges entirely
+- **Resume orphan reminder** — on resume, `in_progress` tasks that no longer have running agents surface a one-time reminder
+- **Widget budget + terminal-state UX** — widget now renders skipped tasks, can collapse terminal tasks when many active tasks exist, and shows budget/timeout hints for active tasks
 
 ### Changed
 - **Session-state is now the default backend** — new installs/default config use Pi session history for task persistence unless the user selects `file` or sets `PI_TASKS` explicitly.
 - **Storage path resolution** — file-backed task paths are now resolved from a shared helper so session/project scope and local/global location follow one code path.
 - **Backend-aware settings** — file scope/location settings are now explicitly file-backend options and are ignored when `persistenceBackend` is `session_state`.
+- **Dependency resolution semantics** — blockers in `completed` or `skipped` state are now treated as resolved, and missing/deleted blockers no longer permanently block dependent tasks
+- **TaskExecute model passthrough** — model overrides are now forwarded to spawned agents and preserved for auto-cascade launches
+- **Reminder suppression** — nudges are now suppressed while work is actively in progress
+
+### Fixed
+- **Transitive dependency cycle detection** — cycles like `A → B → C → A` now warn correctly instead of only catching direct mutual cycles
+- **File store hardening** — safer config/store loading, better lock handling, bounded retries, and improved cleanup around temp/store files
+- **Process tracker robustness** — capped output buffers, signal reporting, safer missing-pid handling, and explicit tracker cleanup/disposal
 
 ## [0.4.2] - 2026-03-24
 

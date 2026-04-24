@@ -188,7 +188,7 @@ describe("TaskStore (in-memory)", () => {
 
     expect(store.get("1")!.blocks).toContain("2");
     expect(store.get("2")!.blocks).toContain("1");
-    expect(warnings).toContain("cycle: #2 and #1 block each other");
+    expect(warnings).toContain("cycle: #2 → #1 creates a dependency cycle");
   });
 
   it("allows self-dependency with warning", () => {
@@ -281,7 +281,7 @@ describe("TaskStore (in-memory)", () => {
     store.create("B", "Desc");
     store.update("1", { addBlocks: ["2"] });
     const { warnings } = store.update("1", { addBlockedBy: ["2"] });
-    expect(warnings).toContain("cycle: #1 and #2 block each other");
+    expect(warnings).toContain("cycle: #1 ← #2 creates a dependency cycle");
   });
 
   it("clearCompleted returns 0 when no completed tasks", () => {

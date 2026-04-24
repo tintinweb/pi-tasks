@@ -12,15 +12,18 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 
 ## Features
 
-- **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
-- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time and token counts
-- **System-reminder injection** — periodic `<system-reminder>` nudges appended to tool results when task tools haven't been used recently (matches Claude Code's behavior exactly)
-- **Prompt guidelines** — workflow contract encoded in tool descriptions, nudging the LLM at the point of tool use
-- **Dependency management** — bidirectional `blocks`/`blockedBy` relationships with warnings for cycles, self-deps, and dangling references
+- **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute`
+- **Flexible task creation** — `TaskCreate` supports single-task and batch modes, dependency wiring (`blockedBy` / `blocks`), and optional initial `in_progress` status
+- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻`/`⊘` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks, token stats, and budget/timeout hints
+- **System-reminder injection** — periodic `<system-reminder>` nudges appended to tool results when task tools haven't been used recently, with configurable interval and suppression while work is actively in progress
+- **Resume awareness** — resumed sessions with orphaned `in_progress` tasks get a one-time reminder that those agents are no longer running
+- **Dependency management** — bidirectional `blocks`/`blockedBy` relationships with warnings for cycles, self-deps, dangling references, and transitive cycle detection
+- **Resolved task states** — both `completed` and `skipped` count as terminal states for dependency unblocking and cleanup
 - **Shared task lists** — multiple pi sessions can share a file-backed task list for agent team coordination
-- **File locking** — concurrent access is safe when multiple sessions share a task list
-- **Background process tracking** — track spawned processes with output buffering, blocking wait, and graceful stop
-- **Subagent integration** — tasks with `agentType` can be executed as subagents via `TaskExecute` (requires [@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents)). Auto-cascade mode flows through the task DAG automatically when enabled.
+- **File locking and store hardening** — bounded lock retries, safer JSON loading, stale lock handling, and better cleanup for file-backed stores
+- **Background process tracking** — bounded output buffering, signal reporting, blocking wait, graceful stop, and explicit tracker cleanup
+- **Subagent integration** — tasks with `agentType` can be executed as subagents via `TaskExecute`, with model passthrough, timeout support, token budgets, and auto-cascade through the task DAG
+- **Cross-extension RPC API** — event-bus handlers (`tasks:rpc:*`) let other Pi extensions create and update tasks programmatically
 
 ## Install
 
@@ -51,24 +54,45 @@ The extension renders a persistent widget above the editor:
 | `✔` | Completed (strikethrough + dim) |
 | `◼` | In-progress (not actively executing) |
 | `◻` | Pending |
-| `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, token counts) |
+| `⊘` | Skipped / intentionally not done |
+| `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, token counts, and optional budget/timeout info) |
 
 ## Tools
 
 ### `TaskCreate`
 
-Create a structured task. Used proactively for complex multi-step work.
+Create one or more structured tasks. Supports both single-task and batch creation.
+
+**Single mode** — pass `subject` and `description` directly:
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `subject` | string | yes | Brief imperative title |
-| `description` | string | yes | Detailed context and acceptance criteria |
+| `subject` | string | yes* | Brief imperative title |
+| `description` | string | yes* | Detailed context and acceptance criteria |
 | `activeForm` | string | no | Present continuous form for spinner (e.g., "Running tests") |
 | `agentType` | string | no | Agent type for subagent execution (e.g., `"general-purpose"`, `"Explore"`) |
 | `metadata` | object | no | Arbitrary key-value pairs |
+| `blockedBy` | string[] | no | Task IDs that block this task |
+| `blocks` | string[] | no | Task IDs that this task blocks |
+| `status` | `pending` / `in_progress` | no | Initial status |
+| `clearCompleted` | boolean | no | Clear completed/skipped tasks before creating |
+
+*Required unless `tasks` is provided.*
+
+**Batch mode** — pass a `tasks` array:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `tasks` | array | yes | Array of task objects (same fields as single mode) |
+| `clearCompleted` | boolean | no | Clear completed/skipped tasks before creating the batch |
+
+Tasks are created in array order with sequential IDs. You can wire dependencies during creation by using `blockedBy` / `blocks` on each task.
 
 ```
-→ Task #1 created successfully: Fix authentication bug
+→ Created 3 task(s):
+  #1: Set up database schema
+  #2: Implement API endpoints
+  #3: Write integration tests
 ```
 
 ### `TaskList`
@@ -81,7 +105,7 @@ List all tasks with status, owner, and blocked-by info.
 #3 [pending] Update docs [blocked by #1, #2]
 ```
 
-Sort order: pending first, then in-progress, then completed (each group by ID).
+Sort order: pending first, then in-progress, then completed, then skipped (each group by ID).
 
 ### `TaskGet`
 
@@ -96,7 +120,7 @@ Blocked by: #1
 Blocks: #3
 ```
 
-Shows owner (if set) and open (non-completed) dependency edges. Non-empty metadata is displayed as JSON.
+Shows owner (if set) and open (non-terminal) dependency edges. Non-empty metadata is displayed as JSON.
 
 ### `TaskUpdate`
 
@@ -105,7 +129,7 @@ Update task fields, status, metadata, and dependencies.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `taskId` | string | Task ID (required) |
-| `status` | `pending` / `in_progress` / `completed` / `deleted` | New status |
+| `status` | `pending` / `in_progress` / `completed` / `skipped` / `deleted` | New status |
 | `subject` | string | New title |
 | `description` | string | New description |
 | `activeForm` | string | Spinner text |
@@ -118,7 +142,7 @@ Update task fields, status, metadata, and dependencies.
 → Updated task #1 status
 → Updated task #2 owner, status
 → Updated task #3 blocks
-→ Updated task #3 blocks (warning: cycle: #3 and #1 block each other)
+→ Updated task #3 blocks (warning: cycle: #3 → #1 creates a dependency cycle)
 → Updated task #1 deleted
 ```
 
@@ -156,8 +180,10 @@ Execute one or more tasks as background subagents. Requires [@tintinweb/pi-subag
 | `additional_context` | string | Extra context appended to each agent's prompt |
 | `model` | string | Model override (e.g., `"sonnet"`, `"haiku"`) |
 | `max_turns` | number | Max turns per agent |
+| `token_budget` | number | Approximate token budget per agent (best-effort tracking/display) |
+| `timeout_ms` | number | Max wall-clock time in ms; on timeout the task is auto-completed and a stop RPC is emitted |
 
-Tasks must be `pending`, have `agentType` set, and all `blockedBy` dependencies `completed`. Each task spawns as an independent background subagent.
+Tasks must be `pending`, have `agentType` set, and all `blockedBy` dependencies resolved (`completed` or `skipped`). Each task spawns as an independent background subagent.
 
 With **auto-cascade** enabled (via `/tasks` → Settings), completed tasks automatically trigger execution of their unblocked dependents — flowing through the DAG like a build system.
 
@@ -165,17 +191,18 @@ With **auto-cascade** enabled (via `/tasks` → Settings), completed tasks autom
 
 ```
 pending → in_progress → completed
+                      → skipped
                       → deleted (permanently removed)
 ```
 
-Tasks are created as `pending`. Mark `in_progress` before starting work, `completed` when done. `deleted` removes entirely — IDs never reset.
+Tasks are created as `pending` by default. Mark `in_progress` before starting work, `completed` when done, or `skipped` when a task is intentionally not being completed. `deleted` removes entirely — IDs never reset.
 
 ## Dependency Management
 
 - **Bidirectional edges:** `addBlocks`/`addBlockedBy` maintain both sides automatically
-- **Dependency warnings:** cycles, self-dependencies, and references to non-existent tasks are stored but produce warnings in the tool response
-- **Display-time filtering:** `TaskList` only shows non-completed blockers in `[blocked by ...]`
-- **Raw data preserved:** `TaskGet` shows ALL edges, including completed blockers
+- **Dependency warnings:** cycles, self-dependencies, transitive cycles, and references to non-existent tasks are stored but produce warnings in the tool response
+- **Display-time filtering:** `TaskList` only shows non-terminal blockers in `[blocked by ...]`
+- **Raw data preserved:** `TaskGet` shows all edges while terminal blockers (`completed` / `skipped`) still count as resolved for execution logic
 - **Cleanup on deletion:** removing a task cleans up all edges pointing to it
 
 ## Task Storage
@@ -221,7 +248,7 @@ On new session start, if all persisted tasks are completed they are auto-cleared
 
 ### Auto-clear completed tasks
 
-The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
+The `autoClearCompleted` setting controls automatic cleanup of completed and skipped tasks:
 
 | Mode | Behaviour |
 |------|-----------|
@@ -231,7 +258,7 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-Settings (`persistenceBackend`, `taskScope`, `taskStorageLocation`, `autoCascade`, `autoClearCompleted`) are saved to `<cwd>/.pi/tasks-config.json`.
+Settings (`persistenceBackend`, `taskScope`, `taskStorageLocation`, `autoCascade`, `nudgeInterval`, `autoClearCompleted`) are saved to `<cwd>/.pi/tasks-config.json`.
 
 ### Override via environment variables
 
@@ -273,9 +300,11 @@ Tasks
 - **Create task** — input prompts for subject and description
 - **Clear completed** — remove all completed tasks
 - **Clear all** — remove all tasks regardless of status
-- **Settings** — configure persistence backend, task storage scope, task file location, auto-cascade, and auto-clear completed tasks (saved to `tasks-config.json`)
+- **Settings** — configure persistence backend, task storage scope, task file location, auto-cascade, nudge interval, and auto-clear completed tasks (saved to `tasks-config.json`)
 
-## Cross-extension Communication with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents)
+## Cross-extension Communication
+
+### [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents)
 
 [`pi-tasks`](https://github.com/tintinweb/pi-tasks) communicates with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents) via pi's eventbus using a scoped request/reply RPC protocol. No shared global state — just events.
 
@@ -325,6 +354,19 @@ The returned `id` is stored in an in-memory `agentTaskMap` (agentId → taskId) 
 
 If [`pi-subagents`](https://github.com/tintinweb/pi-subagents) is not installed, everything works except `TaskExecute`, which returns a friendly error message. All core task tools (create, list, get, update, dependencies, widget, system-reminder injection) function independently.
 
+### `tasks:rpc:*` event bus API
+
+`pi-tasks` also exposes a small event-bus RPC API so other Pi extensions can integrate with the task system without going through the LLM:
+
+| Event | Purpose |
+|-------|---------|
+| `tasks:rpc:ping` | Presence detection |
+| `tasks:rpc:createMany` | Batch-create tasks with optional dependency wiring |
+| `tasks:rpc:update` | Update an existing task |
+| `tasks:ready` | Broadcast after handlers are registered |
+
+These handlers mirror the extension's internal task semantics, including session-state persistence when that backend is active.
+
 ## Architecture
 
 ```
@@ -332,11 +374,11 @@ src/
 ├── index.ts            # Extension entry: 7 tools + /tasks command + widget + subagent integration
 ├── storage-paths.ts    # Resolves file-backed task paths for local/global + session/project modes
 ├── session-state-store.ts # Branch-aware session-history-backed task state reconstruction
-├── types.ts            # Task, TaskStatus, BackgroundProcess types
-├── task-store.ts       # File-backed store with CRUD, dependencies, locking
-├── auto-clear.ts       # Turn-based auto-clearing of completed tasks (AutoClearManager)
-├── tasks-config.ts     # Config persistence (persistenceBackend, taskScope, taskStorageLocation, autoCascade, autoClearCompleted) → .pi/tasks-config.json
-├── process-tracker.ts  # Background process output buffering and stop
+├── types.ts            # Task, TaskStatus, terminal-status helpers, process/budget types
+├── task-store.ts       # File-backed store with CRUD, dependencies, locking, and snapshot support
+├── auto-clear.ts       # Turn-based auto-clearing of completed/skipped tasks (AutoClearManager)
+├── tasks-config.ts     # Config persistence (persistenceBackend, taskScope, taskStorageLocation, autoCascade, nudgeInterval, autoClearCompleted) → .pi/tasks-config.json
+├── process-tracker.ts  # Background process output buffering, wait/stop, and cleanup
 └── ui/
     ├── task-widget.ts  # Persistent widget with status icons and spinner
     └── settings-menu.ts  # /tasks → Settings panel (SettingsList TUI component)
@@ -351,7 +393,7 @@ src/
 ```bash
 npm install
 npm run typecheck   # TypeScript validation
-npm test            # Run unit tests (145 tests)
+npm test            # Run unit tests (170+ tests)
 ```
 
 ## License

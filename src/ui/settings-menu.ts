@@ -70,6 +70,15 @@ export async function openSettingsMenu(
         values: ["on", "off"],
       },
       {
+        id: "nudgeInterval",
+        label: "Nudge interval",
+        description:
+          "How many non-task tool turns before injecting a reminder nudge. " +
+          "0 disables nudges entirely.",
+        currentValue: String(cfg.nudgeInterval ?? 4),
+        values: ["0", "2", "4", "6", "8"],
+      },
+      {
         id: "autoClearCompleted",
         label: "Auto-clear completed tasks",
         description:
@@ -89,6 +98,10 @@ export async function openSettingsMenu(
       /* onChange */ (id, newValue) => {
         if (id === "autoCascade") {
           cfg.autoCascade = newValue === "on";
+          saveTasksConfig(cfg);
+        }
+        if (id === "nudgeInterval") {
+          cfg.nudgeInterval = parseInt(newValue, 10);
           saveTasksConfig(cfg);
         }
         if (id === "persistenceBackend") {
