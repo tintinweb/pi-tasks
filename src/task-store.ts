@@ -10,6 +10,28 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import type { Task, TaskStatus, TaskStoreData } from "./types.js";
 
+export interface TaskStoreLike {
+  create(subject: string, description: string, activeForm?: string, metadata?: Record<string, any>): Task;
+  get(id: string): Task | undefined;
+  list(): Task[];
+  update(id: string, fields: {
+    status?: TaskStatus | "deleted";
+    subject?: string;
+    description?: string;
+    activeForm?: string;
+    owner?: string;
+    metadata?: Record<string, any>;
+    addBlocks?: string[];
+    addBlockedBy?: string[];
+  }): { task: Task | undefined; changedFields: string[]; warnings: string[] };
+  delete(id: string): boolean;
+  clearAll(): number;
+  deleteFileIfEmpty(): boolean;
+  clearCompleted(): number;
+  getState(): TaskStoreData;
+  replaceState(data: TaskStoreData): void;
+}
+
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_RETRIES = 100; // 5s max
@@ -50,7 +72,7 @@ function isProcessRunning(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-export class TaskStore {
+export class TaskStore implements TaskStoreLike {
   private filePath: string | undefined;
   private lockPath: string | undefined;
 
@@ -279,6 +301,36 @@ export class TaskStore {
     if (!this.filePath || this.tasks.size > 0) return false;
     try { unlinkSync(this.filePath); } catch { /* ignore */ }
     return true;
+  }
+
+  /** Snapshot current state for external persistence/reconstruction. */
+  getState(): TaskStoreData {
+    if (this.filePath) this.load();
+    return {
+      nextId: this.nextId,
+      tasks: this.list().map(task => ({
+        ...task,
+        metadata: { ...task.metadata },
+        blocks: [...task.blocks],
+        blockedBy: [...task.blockedBy],
+      })),
+    };
+  }
+
+  /** Replace all state from an external snapshot. */
+  replaceState(data: TaskStoreData): void {
+    this.withLock(() => {
+      this.nextId = data.nextId;
+      this.tasks.clear();
+      for (const task of data.tasks) {
+        this.tasks.set(task.id, {
+          ...task,
+          metadata: { ...task.metadata },
+          blocks: [...task.blocks],
+          blockedBy: [...task.blockedBy],
+        });
+      }
+    });
   }
 
   /** Remove all completed tasks. */

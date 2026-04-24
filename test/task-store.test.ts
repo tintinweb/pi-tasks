@@ -413,4 +413,18 @@ describe("TaskStore (absolute path)", () => {
     const raw = JSON.parse(readFileSync(absFilePath, "utf-8"));
     expect(raw.tasks).toHaveLength(2);
   });
+
+  it("exports and restores snapshots", () => {
+    const store1 = new TaskStore(absFilePath);
+    store1.create("Snapshot task", "Desc", "Running", { key: "value" });
+    store1.update("1", { status: "in_progress" });
+
+    const snapshot = store1.getState();
+    const store2 = new TaskStore();
+    store2.replaceState(snapshot);
+
+    expect(store2.get("1")?.subject).toBe("Snapshot task");
+    expect(store2.get("1")?.status).toBe("in_progress");
+    expect(store2.get("1")?.metadata).toEqual({ key: "value" });
+  });
 });

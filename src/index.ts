@@ -19,8 +19,14 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@m
 import { Type } from "@sinclair/typebox";
 import { AutoClearManager } from "./auto-clear.js";
 import { ProcessTracker } from "./process-tracker.js";
+import {
+  buildTaskSessionStateDetails,
+  reconstructSessionStateStore,
+  SessionStateTaskStore,
+  TASKS_SESSION_STATE_TYPE,
+} from "./session-state-store.js";
 import { resolveTaskStorePath } from "./storage-paths.js";
-import { TaskStore } from "./task-store.js";
+import { TaskStore, type TaskStoreLike } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
@@ -34,8 +40,8 @@ function debug(...args: unknown[]) {
 
 // ---- Helpers ----
 
-function textResult(msg: string) {
-  return { content: [{ type: "text" as const, text: msg }], details: undefined as any };
+function textResult(msg: string, details?: any) {
+  return { content: [{ type: "text" as const, text: msg }], details: details as any };
 }
 
 /** Task tool names — used to detect task tool usage for reminder suppression. */
@@ -55,8 +61,18 @@ export default function (pi: ExtensionAPI) {
   // Initialize store and config
   const cfg = loadTasksConfig();
   const piTasks = process.env.PI_TASKS;
+  let currentPersistenceBackend = cfg.persistenceBackend ?? "session_state";
   let currentTaskScope = cfg.taskScope ?? "session";
   let currentTaskStorageLocation = cfg.taskStorageLocation ?? "local";
+
+  function getPersistenceBackend() {
+    if (piTasks !== undefined) return "file";
+    return currentPersistenceBackend;
+  }
+
+  function isSessionStateBackend() {
+    return getPersistenceBackend() === "session_state";
+  }
 
   function getTaskScope() {
     return currentTaskScope;
@@ -67,12 +83,14 @@ export default function (pi: ExtensionAPI) {
   }
 
   function applyConfiguredStorageSettings() {
+    currentPersistenceBackend = cfg.persistenceBackend ?? "session_state";
     currentTaskScope = cfg.taskScope ?? "session";
     currentTaskStorageLocation = cfg.taskStorageLocation ?? "local";
   }
 
   /** Resolve the task store path from env/config (without session ID). */
   function resolveStorePath(sessionId?: string): string | undefined {
+    if (isSessionStateBackend()) return undefined;
     return resolveTaskStorePath({
       cwd: process.cwd(),
       taskScope: getTaskScope(),
@@ -82,9 +100,26 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
+  function createStore(sessionId?: string): TaskStoreLike {
+    if (isSessionStateBackend()) return new SessionStateTaskStore();
+    return new TaskStore(resolveStorePath(sessionId));
+  }
+
+  function snapshotSessionState(ctx?: ExtensionContext) {
+    if (!isSessionStateBackend()) return;
+    const targetCtx = ctx ?? latestCtx;
+    if (!targetCtx) return;
+    pi.appendEntry(TASKS_SESSION_STATE_TYPE, buildTaskSessionStateDetails(store));
+  }
+
+  function reconstructStoreFromSession(ctx: ExtensionContext) {
+    if (!isSessionStateBackend()) return;
+    reconstructSessionStateStore(ctx, store);
+  }
+
   // For project scope (or env override), create store immediately.
   // For session scope, start with in-memory and upgrade once we have the session ID.
-  let store = new TaskStore(resolveStorePath());
+  let store: TaskStoreLike = createStore();
   const tracker = new ProcessTracker();
   const widget = new TaskWidget(store);
 
@@ -183,6 +218,15 @@ export default function (pi: ExtensionAPI) {
   // ── Subagent completion listener ──
   // Listens for subagent lifecycle events to update task status and optionally cascade.
 
+  function makeToolResultDetails() {
+    return isSessionStateBackend() ? buildTaskSessionStateDetails(store) : undefined;
+  }
+
+  function persistSessionStateAndUpdateWidget(ctx?: ExtensionContext) {
+    snapshotSessionState(ctx);
+    widget.update();
+  }
+
   // Success → mark task completed, cascade if enabled
   pi.events.on("subagents:completed", async (data) => {
     const { id, result } = data as { id: string; result?: string };
@@ -221,7 +265,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
     autoClear.trackCompletion(task.id, currentTurn);
-    widget.update();
+    persistSessionStateAndUpdateWidget();
   });
 
   // Failure → store error, revert to pending, don't cascade (branch stops)
@@ -244,7 +288,7 @@ export default function (pi: ExtensionAPI) {
       autoClear.resetBatchCountdown();
     }
     widget.setActiveTask(task.id, false);
-    widget.update();
+    persistSessionStateAndUpdateWidget();
   });
 
   // ── Session-scoped store upgrade ──
@@ -255,10 +299,16 @@ export default function (pi: ExtensionAPI) {
   let persistedTasksShown = false;
   function upgradeStoreIfNeeded(ctx: ExtensionContext) {
     if (storeUpgraded) return;
+    if (isSessionStateBackend()) {
+      store = createStore();
+      reconstructStoreFromSession(ctx);
+      widget.setStore(store);
+      storeUpgraded = true;
+      return;
+    }
     if (getTaskScope() === "session" && !piTasks) {
       const sessionId = ctx.sessionManager.getSessionId();
-      const path = resolveStorePath(sessionId);
-      store = new TaskStore(path);
+      store = createStore(sessionId);
       widget.setStore(store);
     }
     storeUpgraded = true;
@@ -275,7 +325,8 @@ export default function (pi: ExtensionAPI) {
     if (tasks.length > 0) {
       if (!isResume && tasks.every(t => t.status === "completed")) {
         store.clearCompleted();
-        if (getTaskScope() === "session") store.deleteFileIfEmpty();
+        if (!isSessionStateBackend() && getTaskScope() === "session") store.deleteFileIfEmpty();
+        persistSessionStateAndUpdateWidget();
       } else {
         widget.update();
       }
@@ -292,7 +343,7 @@ export default function (pi: ExtensionAPI) {
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);
-    if (autoClear.onTurnStart(currentTurn)) widget.update();
+    if (autoClear.onTurnStart(currentTurn)) persistSessionStateAndUpdateWidget(ctx);
   });
 
   // ── Token usage tracking ──
@@ -344,6 +395,37 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  pi.on("session_start", async (_event, ctx) => {
+    latestCtx = ctx;
+    widget.setUICtx(ctx.ui as UICtx);
+    applyConfiguredStorageSettings();
+    storeUpgraded = false;
+    persistedTasksShown = false;
+    widget.resetActivity();
+    upgradeStoreIfNeeded(ctx);
+    showPersistedTasks();
+  });
+
+  pi.on("session_fork", async (_event, ctx) => {
+    latestCtx = ctx;
+    widget.setUICtx(ctx.ui as UICtx);
+    storeUpgraded = false;
+    persistedTasksShown = false;
+    widget.resetActivity();
+    upgradeStoreIfNeeded(ctx);
+    showPersistedTasks(true);
+  });
+
+  pi.on("session_tree", async (_event, ctx) => {
+    latestCtx = ctx;
+    widget.setUICtx(ctx.ui as UICtx);
+    storeUpgraded = false;
+    persistedTasksShown = false;
+    widget.resetActivity();
+    upgradeStoreIfNeeded(ctx);
+    showPersistedTasks(true);
+  });
+
   // session_switch fires on /new (reason: "new") and /resume (reason: "resume").
   // On /new: reset all session-scoped state so the store switches to the new session file.
   // On resume: reload persisted tasks from the existing session file.
@@ -361,9 +443,10 @@ export default function (pi: ExtensionAPI) {
     lastTaskToolUseTurn = 0;
     reminderInjectedThisCycle = false;
     autoClear.reset();
+    widget.resetActivity();
 
     // Memory mode has no file-backed store to switch — clear explicitly on /new
-    if (!isResume && getTaskScope() === "memory") {
+    if (!isSessionStateBackend() && !isResume && getTaskScope() === "memory") {
       store.clearAll();
     }
 
@@ -446,7 +529,7 @@ All tasks are created with status \`pending\`.
       if (params.agentType) meta.agentType = params.agentType;
       const task = store.create(params.subject, params.description, params.activeForm, Object.keys(meta).length > 0 ? meta : undefined);
       widget.update();
-      return Promise.resolve(textResult(`Task #${task.id} created successfully: ${task.subject}`));
+      return Promise.resolve(textResult(`Task #${task.id} created successfully: ${task.subject}`, makeToolResultDetails()));
     },
   });
 
@@ -481,7 +564,7 @@ Use TaskGet with a specific task ID to view full details including description a
 
     execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
       const tasks = store.list();
-      if (tasks.length === 0) return Promise.resolve(textResult("No tasks found"));
+      if (tasks.length === 0) return Promise.resolve(textResult("No tasks found", makeToolResultDetails()));
 
       // Sort: pending first (by ID), then in_progress (by ID), then completed (by ID)
       const statusOrder: Record<string, number> = { pending: 0, in_progress: 1, completed: 2 };
@@ -512,7 +595,7 @@ Use TaskGet with a specific task ID to view full details including description a
         return line;
       });
 
-      return Promise.resolve(textResult(lines.join("\n")));
+      return Promise.resolve(textResult(lines.join("\n"), makeToolResultDetails()));
     },
   });
 
@@ -550,7 +633,7 @@ Returns full task details:
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const task = store.get(params.taskId);
-      if (!task) return Promise.resolve(textResult(`Task not found`));
+      if (!task) return Promise.resolve(textResult(`Task not found`, makeToolResultDetails()));
 
       // Unescape literal \n sequences the LLM may have double-escaped in JSON
       const desc = task.description.replace(/\\n/g, "\n");
@@ -583,7 +666,7 @@ Returns full task details:
         lines.push(`Metadata: ${JSON.stringify(task.metadata)}`);
       }
 
-      return Promise.resolve(textResult(lines.join("\n")));
+      return Promise.resolve(textResult(lines.join("\n"), makeToolResultDetails()));
     },
   });
 
@@ -695,7 +778,7 @@ Set up task dependencies:
       const { task, changedFields, warnings } = store.update(taskId, fields);
 
       if (changedFields.length === 0 && !task) {
-        return Promise.resolve(textResult(`Task #${taskId} not found`));
+        return Promise.resolve(textResult(`Task #${taskId} not found`, makeToolResultDetails()));
       }
 
       // Update widget active task tracking
@@ -714,7 +797,7 @@ Set up task dependencies:
       if (warnings.length > 0) {
         msg += ` (warning: ${warnings.join("; ")})`;
       }
-      return Promise.resolve(textResult(msg));
+      return Promise.resolve(textResult(msg, makeToolResultDetails()));
     },
   });
 
@@ -774,7 +857,7 @@ Set up task dependencies:
             });
           }
           const updated = store.get(task_id) ?? task;
-          return textResult(`Task #${task_id} [${updated.status}] — subagent ${task.metadata.agentId}`);
+          return textResult(`Task #${task_id} [${updated.status}] — subagent ${task.metadata.agentId}`, makeToolResultDetails());
         }
         throw new Error(`No background process for task ${task_id}`);
       }
@@ -784,12 +867,14 @@ Set up task dependencies:
         if (result) {
           return textResult(
             `Task #${task_id} (${result.status})${result.exitCode !== undefined ? ` exit code: ${result.exitCode}` : ""}\n\n${result.output}`,
+            makeToolResultDetails(),
           );
         }
       }
 
       return textResult(
         `Task #${task_id} (${processOutput.status})${processOutput.exitCode !== undefined ? ` exit code: ${processOutput.exitCode}` : ""}\n\n${processOutput.output}`,
+        makeToolResultDetails(),
       );
     },
   });
@@ -827,12 +912,12 @@ Set up task dependencies:
         }
         const task = store.get(resolvedId);
         if (task?.metadata?.agentId && task.status === "in_progress") {
-          store.update(taskId, { status: "completed" });
-          autoClear.trackCompletion(taskId, currentTurn);
+          store.update(resolvedId, { status: "completed" });
+          autoClear.trackCompletion(resolvedId, currentTurn);
           await stopSubagent(task.metadata.agentId);
-          widget.setActiveTask(taskId, false);
-          widget.update();
-          return textResult(`Task #${taskId} stopped successfully`);
+          widget.setActiveTask(resolvedId, false);
+          persistSessionStateAndUpdateWidget();
+          return textResult(`Task #${resolvedId} stopped successfully`, makeToolResultDetails());
         }
         throw new Error(`No running background process for task ${taskId}`);
       }
@@ -840,8 +925,8 @@ Set up task dependencies:
       store.update(taskId, { status: "completed" });
       autoClear.trackCompletion(taskId, currentTurn);
       widget.setActiveTask(taskId, false);
-      widget.update();
-      return textResult(`Task #${taskId} stopped successfully`);
+      persistSessionStateAndUpdateWidget();
+      return textResult(`Task #${taskId} stopped successfully`, makeToolResultDetails());
     },
   });
 
@@ -880,7 +965,8 @@ Set up task dependencies:
       if (!subagentsAvailable) {
         return textResult(
           "Subagent execution is currently unavailable. " +
-          "Ensure the @tintinweb/pi-subagents extension is loaded and try again."
+          "Ensure the @tintinweb/pi-subagents extension is loaded and try again.",
+          makeToolResultDetails(),
         );
       }
 
@@ -939,19 +1025,22 @@ Set up task dependencies:
         maxTurns: params.max_turns,
       };
 
-      widget.update();
+      persistSessionStateAndUpdateWidget();
 
       const lines: string[] = [];
       if (launched.length > 0) {
+        const backendNote = isSessionStateBackend()
+          ? " Session-state persistence tracks task metadata/status across branches, but live process output remains available only in the current runtime."
+          : "";
         lines.push(
           `Launched ${launched.length} agent(s):\n${launched.join("\n")}\n` +
-          `Use TaskOutput to check progress. Do not spawn additional agents for these tasks.`
+          `Use TaskOutput to check progress. Do not spawn additional agents for these tasks.${backendNote}`
         );
       }
       if (results.length > 0) lines.push(`Skipped:\n${results.join("\n")}`);
       if (lines.length === 0) lines.push("No tasks to execute.");
 
-      return textResult(lines.join("\n\n"));
+      return textResult(lines.join("\n\n"), makeToolResultDetails());
     },
   });
 
@@ -988,13 +1077,13 @@ Set up task dependencies:
           await settingsMenu();
         } else if (choice.startsWith("Clear completed")) {
           store.clearCompleted();
-          if (getTaskScope() === "session") store.deleteFileIfEmpty();
-          widget.update();
+          if (!isSessionStateBackend() && getTaskScope() === "session") store.deleteFileIfEmpty();
+          persistSessionStateAndUpdateWidget(ctx);
           await mainMenu();
         } else if (choice.startsWith("Clear all")) {
           store.clearAll();
-          if (getTaskScope() === "session") store.deleteFileIfEmpty();
-          widget.update();
+          if (!isSessionStateBackend() && getTaskScope() === "session") store.deleteFileIfEmpty();
+          persistSessionStateAndUpdateWidget(ctx);
           await mainMenu();
         }
       };
@@ -1049,18 +1138,18 @@ Set up task dependencies:
         if (action === "▸ Start (in_progress)") {
           store.update(taskId, { status: "in_progress" });
           widget.setActiveTask(taskId);
-          widget.update();
+          persistSessionStateAndUpdateWidget(ctx);
           return viewTasks();
         } else if (action === "✓ Complete") {
           store.update(taskId, { status: "completed" });
           autoClear.trackCompletion(taskId, currentTurn);
           widget.setActiveTask(taskId, false);
-          widget.update();
+          persistSessionStateAndUpdateWidget(ctx);
           return viewTasks();
         } else if (action === "✗ Delete") {
           store.update(taskId, { status: "deleted" });
           widget.setActiveTask(taskId, false);
-          widget.update();
+          persistSessionStateAndUpdateWidget(ctx);
           return viewTasks();
         }
         return viewTasks();
@@ -1076,7 +1165,7 @@ Set up task dependencies:
         if (!description) return mainMenu();
 
         store.create(subject, description);
-        widget.update();
+        persistSessionStateAndUpdateWidget(ctx);
         return mainMenu();
       };
 

@@ -4,7 +4,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { TaskStorageLocation } from "./storage-paths.js";
 
+export type TasksPersistenceBackend = "file" | "session_state";
+
 export interface TasksConfig {
+  persistenceBackend?: TasksPersistenceBackend;  // default: "session_state"
   taskScope?: "memory" | "session" | "project";  // default: "session"
   taskStorageLocation?: TaskStorageLocation;  // default: "local"
   autoCascade?: boolean;   // default: false

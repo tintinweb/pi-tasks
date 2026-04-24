@@ -9,7 +9,7 @@
  */
 
 import { truncateToWidth } from "@mariozechner/pi-tui";
-import type { TaskStore } from "../task-store.js";
+import type { TaskStoreLike } from "../task-store.js";
 
 // ---- Types ----
 
@@ -73,10 +73,15 @@ export class TaskWidget {
   /** Whether the widget callback is currently registered. */
   private widgetRegistered = false;
 
-  constructor(private store: TaskStore) {}
+  constructor(private store: TaskStoreLike) {}
 
-  setStore(store: TaskStore) {
+  setStore(store: TaskStoreLike) {
     this.store = store;
+  }
+
+  resetActivity() {
+    this.activeTaskIds.clear();
+    this.metrics.clear();
   }
 
   setUICtx(ctx: UICtx) {

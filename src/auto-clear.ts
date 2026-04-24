@@ -8,7 +8,7 @@
  * Both use the same turn delay (REMINDER_INTERVAL) for consistency.
  */
 
-import type { TaskStore } from "./task-store.js";
+import type { TaskStoreLike } from "./task-store.js";
 
 export type AutoClearMode = "never" | "on_list_complete" | "on_task_complete";
 
@@ -19,7 +19,7 @@ export class AutoClearManager {
   private allCompletedAtTurn: number | null = null;
 
   constructor(
-    private getStore: () => TaskStore,
+    private getStore: () => TaskStoreLike,
     private getMode: () => AutoClearMode,
     /** How many turns completed tasks linger before auto-clearing. */
     private clearDelayTurns = 4,

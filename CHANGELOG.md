@@ -13,9 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `global`: stores file-backed tasks in `~/.pi/agent/extensions/pi-tasks/--<project-path>--/tasks/`
   - Works with both `session` and `project` storage scopes; `memory` mode remains in-memory only
   - Exposed in `/tasks` → Settings as "Task file location"
+- **Session-state persistence backend** — new `persistenceBackend` setting with `file` and `session_state` (default) values:
+  - `session_state`: stores task state inside Pi session history instead of external files
+  - Reconstructs the current task list from the active branch, following Pi’s official state-management pattern from the `todo.ts` example
+  - Applies to task tool mutations and non-tool mutations (`/tasks` UI actions, auto-clear, subagent lifecycle updates)
 
 ### Changed
+- **Session-state is now the default backend** — new installs/default config use Pi session history for task persistence unless the user selects `file` or sets `PI_TASKS` explicitly.
 - **Storage path resolution** — file-backed task paths are now resolved from a shared helper so session/project scope and local/global location follow one code path.
+- **Backend-aware settings** — file scope/location settings are now explicitly file-backend options and are ignored when `persistenceBackend` is `session_state`.
 
 ## [0.4.2] - 2026-03-24
 

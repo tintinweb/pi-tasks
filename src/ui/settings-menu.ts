@@ -30,13 +30,23 @@ export async function openSettingsMenu(
   await ui.custom((_tui, theme, _kb, done) => {
     const items: SettingItem[] = [
       {
+        id: "persistenceBackend",
+        label: "Task persistence backend",
+        description:
+          "file: save tasks outside the session in JSON files. " +
+          "session_state: store task state in the Pi session history for proper branching. " +
+          "Takes effect on next session start.",
+        currentValue: cfg.persistenceBackend ?? "session_state",
+        values: ["file", "session_state"],
+      },
+      {
         id: "taskScope",
         label: "Task storage",
         description:
           "memory: tasks live only in memory, lost when session ends. " +
           "session: persisted per session (tasks-<sessionId>.json), survives resume. " +
           "project: shared across all sessions (tasks.json). " +
-          "Takes effect on next session start.",
+          "Used only when Task persistence backend is file. Takes effect on next session start.",
         currentValue: cfg.taskScope ?? "session",
         values: ["memory", "session", "project"],
       },
@@ -46,7 +56,7 @@ export async function openSettingsMenu(
         description:
           "local: save file-backed tasks in the current project's .pi directory. " +
           "global: save file-backed tasks under ~/.pi/agent for this project. " +
-          "Ignored when Task storage is memory. Takes effect on next session start.",
+          "Used only when Task persistence backend is file. Ignored by memory and session_state backends. Takes effect on next session start.",
         currentValue: cfg.taskStorageLocation ?? "local",
         values: ["local", "global"],
       },
@@ -79,6 +89,10 @@ export async function openSettingsMenu(
       /* onChange */ (id, newValue) => {
         if (id === "autoCascade") {
           cfg.autoCascade = newValue === "on";
+          saveTasksConfig(cfg);
+        }
+        if (id === "persistenceBackend") {
+          cfg.persistenceBackend = newValue as NonNullable<TasksConfig["persistenceBackend"]>;
           saveTasksConfig(cfg);
         }
         if (id === "taskScope") {

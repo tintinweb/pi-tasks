@@ -180,12 +180,22 @@ Tasks are created as `pending`. Mark `in_progress` before starting work, `comple
 
 ## Task Storage
 
-Task storage is controlled by two settings:
+Task storage is controlled by three settings:
 
+- `persistenceBackend` (`/tasks` → Settings → Task persistence backend)
 - `taskScope` (`/tasks` → Settings → Task storage)
 - `taskStorageLocation` (`/tasks` → Settings → Task file location)
 
-### Storage scope
+### Persistence backend
+
+| Backend | Behaviour |
+|---------|-----------|
+| `file` | Save tasks outside the session in JSON files |
+| `session_state` **(default)** | Store task state in Pi session history for proper branching |
+
+`session_state` reconstructs the task list from the current branch by replaying Pi session entries, similar to the official `todo.ts` example. This means branch navigation and forking restore the task state that was current at that point in history. File-specific settings below are ignored when this backend is selected. If `PI_TASKS` is set, that explicit env override still forces the file backend for that run.
+
+### File backend: storage scope
 
 | Mode | File name | Behaviour |
 |------|-----------|-----------|
@@ -193,7 +203,7 @@ Task storage is controlled by two settings:
 | `session` **(default)** | `tasks-<sessionId>.json` | Per-session file — isolated between sessions, survives resume |
 | `project` | `tasks.json` | Shared across all sessions in the project |
 
-### Storage location
+### File backend: storage location
 
 | Location | Directory | Behaviour |
 |----------|-----------|-----------|
@@ -201,10 +211,11 @@ Task storage is controlled by two settings:
 | `global` | `~/.pi/agent/extensions/pi-tasks/--<project-path>--/tasks/` | Save file-backed tasks in the global Pi directory, separated per project |
 
 Examples:
-- `session` + `local` → `<cwd>/.pi/tasks/tasks-<sessionId>.json`
-- `project` + `local` → `<cwd>/.pi/tasks/tasks.json`
-- `session` + `global` → `~/.pi/agent/extensions/pi-tasks/--<project-path>--/tasks/tasks-<sessionId>.json`
-- `project` + `global` → `~/.pi/agent/extensions/pi-tasks/--<project-path>--/tasks/tasks.json`
+- `file` + `session` + `local` → `<cwd>/.pi/tasks/tasks-<sessionId>.json`
+- `file` + `project` + `local` → `<cwd>/.pi/tasks/tasks.json`
+- `file` + `session` + `global` → `~/.pi/agent/extensions/pi-tasks/--<project-path>--/tasks/tasks-<sessionId>.json`
+- `file` + `project` + `global` → `~/.pi/agent/extensions/pi-tasks/--<project-path>--/tasks/tasks.json`
+- `session_state` → persisted in Pi session history on the current branch, no external task file
 
 On new session start, if all persisted tasks are completed they are auto-cleared for a clean slate. On session resume, all tasks (including completed) are shown so the user can review progress. Empty session files are automatically deleted when all tasks are cleared.
 
@@ -220,7 +231,7 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-Settings (`taskScope`, `taskStorageLocation`, `autoCascade`, `autoClearCompleted`) are saved to `<cwd>/.pi/tasks-config.json`.
+Settings (`persistenceBackend`, `taskScope`, `taskStorageLocation`, `autoCascade`, `autoClearCompleted`) are saved to `<cwd>/.pi/tasks-config.json`.
 
 ### Override via environment variables
 
@@ -262,7 +273,7 @@ Tasks
 - **Create task** — input prompts for subject and description
 - **Clear completed** — remove all completed tasks
 - **Clear all** — remove all tasks regardless of status
-- **Settings** — configure task storage scope, task file location, auto-cascade, and auto-clear completed tasks (saved to `tasks-config.json`)
+- **Settings** — configure persistence backend, task storage scope, task file location, auto-cascade, and auto-clear completed tasks (saved to `tasks-config.json`)
 
 ## Cross-extension Communication with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents)
 
@@ -320,10 +331,11 @@ If [`pi-subagents`](https://github.com/tintinweb/pi-subagents) is not installed,
 src/
 ├── index.ts            # Extension entry: 7 tools + /tasks command + widget + subagent integration
 ├── storage-paths.ts    # Resolves file-backed task paths for local/global + session/project modes
+├── session-state-store.ts # Branch-aware session-history-backed task state reconstruction
 ├── types.ts            # Task, TaskStatus, BackgroundProcess types
 ├── task-store.ts       # File-backed store with CRUD, dependencies, locking
 ├── auto-clear.ts       # Turn-based auto-clearing of completed tasks (AutoClearManager)
-├── tasks-config.ts     # Config persistence (taskScope, taskStorageLocation, autoCascade, autoClearCompleted) → .pi/tasks-config.json
+├── tasks-config.ts     # Config persistence (persistenceBackend, taskScope, taskStorageLocation, autoCascade, autoClearCompleted) → .pi/tasks-config.json
 ├── process-tracker.ts  # Background process output buffering and stop
 └── ui/
     ├── task-widget.ts  # Persistent widget with status icons and spinner
