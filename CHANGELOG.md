@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Skipped task status** — tasks can now be marked `skipped`, which counts as a resolved/terminal state for dependency unblocking and cleanup
 - **Enhanced `TaskCreate`** — now supports batch creation via `tasks`, dependency wiring at creation time (`blockedBy` / `blocks`), optional initial `in_progress` status, and an explicit `clearCompleted` flag
 - **Task execution budgets/timeouts** — `TaskExecute` now accepts `token_budget` and `timeout_ms`; timeouts auto-complete the task and emit a stop RPC, while token budgets are tracked best-effort for display
-- **Task RPC API** — new `tasks:rpc:ping`, `tasks:rpc:createMany`, `tasks:rpc:update`, and `tasks:ready` event-bus handlers for cross-extension task integration; `tasks:rpc:update` now supports both single-task and batch updates
+- **Task RPC API** — new `tasks:rpc:ping`, `tasks:rpc:createMany`, `tasks:rpc:updateMany`, and `tasks:ready` event-bus handlers for cross-extension task integration; `tasks:rpc:updateMany` now supports both single-task and batch updates
 - **Nudge interval setting** — new `nudgeInterval` config controls reminder cadence; `0` disables nudges entirely
 - **Resume orphan reminder** — on resume, `in_progress` tasks that no longer have running agents surface a one-time reminder
 - **Widget budget + terminal-state UX** — widget now renders skipped tasks, can collapse terminal tasks when many active tasks exist, and shows budget/timeout hints for active tasks

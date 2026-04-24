@@ -577,14 +577,14 @@ describe("Standalone operation (no subagents extension)", () => {
 });
 
 describe("RPC protocol correctness", () => {
-  it("tasks:rpc:update supports single-task updates", async () => {
+  it("tasks:rpc:updateMany supports single-task updates", async () => {
     const mock = mockPi();
     const replies: unknown[] = [];
-    mock.pi.events.on("tasks:rpc:update:reply:req-1", data => { replies.push(data); });
+    mock.pi.events.on("tasks:rpc:updateMany:reply:req-1", data => { replies.push(data); });
     initExtension(mock.pi as any);
 
     await mock.executeTool("TaskCreate", { subject: "RPC single", description: "desc" });
-    mock.emitEvent("tasks:rpc:update", {
+    mock.emitEvent("tasks:rpc:updateMany", {
       requestId: "req-1",
       taskId: "1",
       fields: { status: "completed" },
@@ -597,15 +597,15 @@ describe("RPC protocol correctness", () => {
     expect(result.content[0].text).toContain("completed");
   });
 
-  it("tasks:rpc:update supports batch updates", async () => {
+  it("tasks:rpc:updateMany supports batch updates", async () => {
     const mock = mockPi();
     const replies: unknown[] = [];
-    mock.pi.events.on("tasks:rpc:update:reply:req-2", data => { replies.push(data); });
+    mock.pi.events.on("tasks:rpc:updateMany:reply:req-2", data => { replies.push(data); });
     initExtension(mock.pi as any);
 
     await mock.executeTool("TaskCreate", { subject: "RPC first", description: "desc" });
     await mock.executeTool("TaskCreate", { subject: "RPC second", description: "desc" });
-    mock.emitEvent("tasks:rpc:update", {
+    mock.emitEvent("tasks:rpc:updateMany", {
       requestId: "req-2",
       tasks: [
         { taskId: "1", status: "in_progress" },
@@ -624,14 +624,14 @@ describe("RPC protocol correctness", () => {
     expect(second.content[0].text).toContain("Blocked by: #1");
   });
 
-  it("tasks:rpc:update batch reports missing IDs and warnings", async () => {
+  it("tasks:rpc:updateMany batch reports missing IDs and warnings", async () => {
     const mock = mockPi();
     const replies: unknown[] = [];
-    mock.pi.events.on("tasks:rpc:update:reply:req-3", data => { replies.push(data); });
+    mock.pi.events.on("tasks:rpc:updateMany:reply:req-3", data => { replies.push(data); });
     initExtension(mock.pi as any);
 
     await mock.executeTool("TaskCreate", { subject: "RPC existing", description: "desc" });
-    mock.emitEvent("tasks:rpc:update", {
+    mock.emitEvent("tasks:rpc:updateMany", {
       requestId: "req-3",
       tasks: [
         { taskId: "1", addBlockedBy: ["999"] },

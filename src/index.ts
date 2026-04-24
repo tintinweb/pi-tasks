@@ -428,7 +428,7 @@ export default function (pi: ExtensionAPI) {
     }
   }));
 
-  eventUnsubs.push(pi.events.on("tasks:rpc:update", (payload: unknown) => {
+  eventUnsubs.push(pi.events.on("tasks:rpc:updateMany", (payload: unknown) => {
     const p = payload as Record<string, unknown> | undefined;
     if (!p || typeof p.requestId !== "string") return;
     const requestId = p.requestId;
@@ -482,7 +482,7 @@ export default function (pi: ExtensionAPI) {
         }
 
         persistSessionStateAndUpdateWidget();
-        pi.events.emit(`tasks:rpc:update:reply:${requestId}`, {
+        pi.events.emit(`tasks:rpc:updateMany:reply:${requestId}`, {
           success: missingIds.length === 0,
           ids: updatedIds,
           ...(missingIds.length > 0 && { missingIds }),
@@ -498,12 +498,12 @@ export default function (pi: ExtensionAPI) {
       });
 
       persistSessionStateAndUpdateWidget();
-      pi.events.emit(`tasks:rpc:update:reply:${requestId}`, {
+      pi.events.emit(`tasks:rpc:updateMany:reply:${requestId}`, {
         success: !!result.task,
         ...(result.warnings.length > 0 && { warnings: result.warnings }),
       });
     } catch (err: any) {
-      pi.events.emit(`tasks:rpc:update:reply:${requestId}`, { error: err.message });
+      pi.events.emit(`tasks:rpc:updateMany:reply:${requestId}`, { error: err.message });
     }
   }));
 
