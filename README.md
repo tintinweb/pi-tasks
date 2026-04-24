@@ -373,10 +373,10 @@ If [`pi-subagents`](https://github.com/tintinweb/pi-subagents) is not installed,
 |-------|---------|
 | `tasks:rpc:ping` | Presence detection |
 | `tasks:rpc:createMany` | Batch-create tasks with optional dependency wiring |
-| `tasks:rpc:update` | Update one task or batch-update multiple tasks |
+| `tasks:rpc:updateMany` | Update one task or batch-update multiple tasks |
 | `tasks:ready` | Broadcast after handlers are registered |
 
-These handlers mirror the extension's internal task semantics, including session-state persistence when that backend is active. Like the LLM tools, `tasks:rpc:createMany` and `tasks:rpc:update` both support single-or-batch workflows.
+These handlers mirror the extension's internal task semantics, including session-state persistence when that backend is active. Like the LLM tools, `tasks:rpc:createMany` and `tasks:rpc:updateMany` both support single-or-batch workflows.
 
 ## Architecture
 
