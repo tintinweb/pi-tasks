@@ -15,11 +15,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { AutoClearManager } from "./auto-clear.js";
 import { ProcessTracker } from "./process-tracker.js";
+import { resolveTaskStorePath } from "./storage-paths.js";
 import { TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
@@ -55,20 +55,31 @@ export default function (pi: ExtensionAPI) {
   // Initialize store and config
   const cfg = loadTasksConfig();
   const piTasks = process.env.PI_TASKS;
-  const taskScope = cfg.taskScope ?? "session";
+  let currentTaskScope = cfg.taskScope ?? "session";
+  let currentTaskStorageLocation = cfg.taskStorageLocation ?? "local";
+
+  function getTaskScope() {
+    return currentTaskScope;
+  }
+
+  function getTaskStorageLocation() {
+    return currentTaskStorageLocation;
+  }
+
+  function applyConfiguredStorageSettings() {
+    currentTaskScope = cfg.taskScope ?? "session";
+    currentTaskStorageLocation = cfg.taskStorageLocation ?? "local";
+  }
 
   /** Resolve the task store path from env/config (without session ID). */
   function resolveStorePath(sessionId?: string): string | undefined {
-    if (piTasks === "off") return undefined;
-    if (piTasks?.startsWith("/")) return piTasks;
-    if (piTasks?.startsWith(".")) return resolve(piTasks);
-    if (piTasks) return piTasks;
-    if (taskScope === "memory") return undefined;
-    if (taskScope === "session" && sessionId) {
-      return join(process.cwd(), ".pi", "tasks", `tasks-${sessionId}.json`);
-    }
-    if (taskScope === "session") return undefined; // no session ID yet, start in-memory
-    return join(process.cwd(), ".pi", "tasks", "tasks.json");
+    return resolveTaskStorePath({
+      cwd: process.cwd(),
+      taskScope: getTaskScope(),
+      storageLocation: getTaskStorageLocation(),
+      sessionId,
+      piTasks,
+    });
   }
 
   // For project scope (or env override), create store immediately.
@@ -244,7 +255,7 @@ export default function (pi: ExtensionAPI) {
   let persistedTasksShown = false;
   function upgradeStoreIfNeeded(ctx: ExtensionContext) {
     if (storeUpgraded) return;
-    if (taskScope === "session" && !piTasks) {
+    if (getTaskScope() === "session" && !piTasks) {
       const sessionId = ctx.sessionManager.getSessionId();
       const path = resolveStorePath(sessionId);
       store = new TaskStore(path);
@@ -264,7 +275,7 @@ export default function (pi: ExtensionAPI) {
     if (tasks.length > 0) {
       if (!isResume && tasks.every(t => t.status === "completed")) {
         store.clearCompleted();
-        if (taskScope === "session") store.deleteFileIfEmpty();
+        if (getTaskScope() === "session") store.deleteFileIfEmpty();
       } else {
         widget.update();
       }
@@ -341,6 +352,7 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui as UICtx);
 
     const isResume = event?.reason === "resume";
+    applyConfiguredStorageSettings();
 
     // Reset session-scoped state for both /new and /resume
     storeUpgraded = false;
@@ -351,7 +363,7 @@ export default function (pi: ExtensionAPI) {
     autoClear.reset();
 
     // Memory mode has no file-backed store to switch — clear explicitly on /new
-    if (!isResume && taskScope === "memory") {
+    if (!isResume && getTaskScope() === "memory") {
       store.clearAll();
     }
 
@@ -976,12 +988,12 @@ Set up task dependencies:
           await settingsMenu();
         } else if (choice.startsWith("Clear completed")) {
           store.clearCompleted();
-          if (taskScope === "session") store.deleteFileIfEmpty();
+          if (getTaskScope() === "session") store.deleteFileIfEmpty();
           widget.update();
           await mainMenu();
         } else if (choice.startsWith("Clear all")) {
           store.clearAll();
-          if (taskScope === "session") store.deleteFileIfEmpty();
+          if (getTaskScope() === "session") store.deleteFileIfEmpty();
           widget.update();
           await mainMenu();
         }

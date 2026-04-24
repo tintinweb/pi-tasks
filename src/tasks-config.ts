@@ -2,9 +2,11 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { TaskStorageLocation } from "./storage-paths.js";
 
 export interface TasksConfig {
   taskScope?: "memory" | "session" | "project";  // default: "session"
+  taskStorageLocation?: TaskStorageLocation;  // default: "local"
   autoCascade?: boolean;   // default: false
   autoClearCompleted?: "never" | "on_list_complete" | "on_task_complete";  // default: "on_list_complete"
 }

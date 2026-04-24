@@ -41,6 +41,16 @@ export async function openSettingsMenu(
         values: ["memory", "session", "project"],
       },
       {
+        id: "taskStorageLocation",
+        label: "Task file location",
+        description:
+          "local: save file-backed tasks in the current project's .pi directory. " +
+          "global: save file-backed tasks under ~/.pi/agent for this project. " +
+          "Ignored when Task storage is memory. Takes effect on next session start.",
+        currentValue: cfg.taskStorageLocation ?? "local",
+        values: ["local", "global"],
+      },
+      {
         id: "autoCascade",
         label: "Auto-execute with agents",
         description:
@@ -73,6 +83,10 @@ export async function openSettingsMenu(
         }
         if (id === "taskScope") {
           cfg.taskScope = newValue as "memory" | "session" | "project";
+          saveTasksConfig(cfg);
+        }
+        if (id === "taskStorageLocation") {
+          cfg.taskStorageLocation = newValue as NonNullable<TasksConfig["taskStorageLocation"]>;
           saveTasksConfig(cfg);
         }
         if (id === "autoClearCompleted") {

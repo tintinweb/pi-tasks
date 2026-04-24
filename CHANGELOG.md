@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Task file location setting** — new `taskStorageLocation` setting with `local` (default) and `global` values:
+  - `local`: keeps file-backed tasks in the project at `<cwd>/.pi/tasks/`
+  - `global`: stores file-backed tasks in `~/.pi/agent/extensions/pi-tasks/--<project-path>--/tasks/`
+  - Works with both `session` and `project` storage scopes; `memory` mode remains in-memory only
+  - Exposed in `/tasks` → Settings as "Task file location"
+
+### Changed
+- **Storage path resolution** — file-backed task paths are now resolved from a shared helper so session/project scope and local/global location follow one code path.
+
 ## [0.4.2] - 2026-03-24
 
 ### Added
