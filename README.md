@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 ## Features
 
 - **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute`
-- **Flexible task creation** — `TaskCreate` supports single-task and batch modes, dependency wiring (`blockedBy` / `blocks`), and optional initial `in_progress` status
+- **Flexible task mutation** — `TaskCreate` and `TaskUpdate` both support single-task and batch modes; creation also supports dependency wiring (`blockedBy` / `blocks`) and optional initial `in_progress` status
 - **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻`/`⊘` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks, token stats, and budget/timeout hints
 - **System-reminder injection** — periodic `<system-reminder>` nudges appended to tool results when task tools haven't been used recently, with configurable interval and suppression while work is actively in progress
 - **Resume awareness** — resumed sessions with orphaned `in_progress` tasks get a one-time reminder that those agents are no longer running
@@ -124,11 +124,13 @@ Shows owner (if set) and open (non-terminal) dependency edges. Non-empty metadat
 
 ### `TaskUpdate`
 
-Update task fields, status, metadata, and dependencies.
+Update one or more tasks' fields, status, metadata, and dependencies.
+
+**Single mode** — pass `taskId` directly:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `taskId` | string | Task ID (required) |
+| `taskId` | string | Task ID (required unless `tasks` is provided) |
 | `status` | `pending` / `in_progress` / `completed` / `skipped` / `deleted` | New status |
 | `subject` | string | New title |
 | `description` | string | New description |
@@ -138,12 +140,21 @@ Update task fields, status, metadata, and dependencies.
 | `addBlocks` | string[] | Task IDs this task blocks |
 | `addBlockedBy` | string[] | Task IDs that block this task |
 
+**Batch mode** — pass a `tasks` array:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `tasks` | array | Array of task update objects (same fields as single mode) |
+
 ```
-→ Updated task #1 status
-→ Updated task #2 owner, status
-→ Updated task #3 blocks
-→ Updated task #3 blocks (warning: cycle: #3 → #1 creates a dependency cycle)
-→ Updated task #1 deleted
+→ Updated task #1 status: pending → in_progress
+→ Updated task #2 owner: none → agent-2; status: pending → completed
+→ Updated task #3 blocks: [] → [#1]
+→ Updated task #3 blocks: [] → [#1] (warning: cycle: #3 → #1 creates a dependency cycle)
+→ Deleted task #1 status: pending → deleted
+→ Processed 2 task(s):
+  Updated task #1 status: in_progress → completed
+  Updated task #2 owner: none → my-name
 ```
 
 Setting `status: "deleted"` permanently removes the task.
@@ -362,10 +373,10 @@ If [`pi-subagents`](https://github.com/tintinweb/pi-subagents) is not installed,
 |-------|---------|
 | `tasks:rpc:ping` | Presence detection |
 | `tasks:rpc:createMany` | Batch-create tasks with optional dependency wiring |
-| `tasks:rpc:update` | Update an existing task |
+| `tasks:rpc:update` | Update one task or batch-update multiple tasks |
 | `tasks:ready` | Broadcast after handlers are registered |
 
-These handlers mirror the extension's internal task semantics, including session-state persistence when that backend is active.
+These handlers mirror the extension's internal task semantics, including session-state persistence when that backend is active. Like the LLM tools, `tasks:rpc:createMany` and `tasks:rpc:update` both support single-or-batch workflows.
 
 ## Architecture
 

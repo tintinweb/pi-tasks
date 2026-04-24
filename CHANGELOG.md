@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Batch `TaskUpdate` support** — `TaskUpdate` now supports both single-task updates and batch updates via `tasks`, aligning it with `TaskCreate`'s single-or-batch workflow
 - **Task file location setting** — new `taskStorageLocation` setting with `local` (default) and `global` values:
   - `local`: keeps file-backed tasks in the project at `<cwd>/.pi/tasks/`
   - `global`: stores file-backed tasks in `~/.pi/agent/extensions/pi-tasks/--<project-path>--/tasks/`
@@ -20,12 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Skipped task status** — tasks can now be marked `skipped`, which counts as a resolved/terminal state for dependency unblocking and cleanup
 - **Enhanced `TaskCreate`** — now supports batch creation via `tasks`, dependency wiring at creation time (`blockedBy` / `blocks`), optional initial `in_progress` status, and an explicit `clearCompleted` flag
 - **Task execution budgets/timeouts** — `TaskExecute` now accepts `token_budget` and `timeout_ms`; timeouts auto-complete the task and emit a stop RPC, while token budgets are tracked best-effort for display
-- **Task RPC API** — new `tasks:rpc:ping`, `tasks:rpc:createMany`, `tasks:rpc:update`, and `tasks:ready` event-bus handlers for cross-extension task integration
+- **Task RPC API** — new `tasks:rpc:ping`, `tasks:rpc:createMany`, `tasks:rpc:update`, and `tasks:ready` event-bus handlers for cross-extension task integration; `tasks:rpc:update` now supports both single-task and batch updates
 - **Nudge interval setting** — new `nudgeInterval` config controls reminder cadence; `0` disables nudges entirely
 - **Resume orphan reminder** — on resume, `in_progress` tasks that no longer have running agents surface a one-time reminder
 - **Widget budget + terminal-state UX** — widget now renders skipped tasks, can collapse terminal tasks when many active tasks exist, and shows budget/timeout hints for active tasks
 
 ### Changed
+- **TaskUpdate docs/examples** — tool description and README now document both single-task and batch update modes
 - **Session-state is now the default backend** — new installs/default config use Pi session history for task persistence unless the user selects `file` or sets `PI_TASKS` explicitly.
 - **Storage path resolution** — file-backed task paths are now resolved from a shared helper so session/project scope and local/global location follow one code path.
 - **Backend-aware settings** — file scope/location settings are now explicitly file-backend options and are ignored when `persistenceBackend` is `session_state`.

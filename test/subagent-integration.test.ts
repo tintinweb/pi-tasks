@@ -498,9 +498,47 @@ describe("Standalone operation (no subagents extension)", () => {
 
   it("TaskUpdate works without subagents", async () => {
     await mock.executeTool("TaskCreate", { subject: "Update me", description: "desc" });
-    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    const update = await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    expect(update.content[0].text).toContain("Updated task #1 status: pending → in_progress");
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("in_progress");
+  });
+
+  it("TaskUpdate supports batch mode without subagents", async () => {
+    await mock.executeTool("TaskCreate", { subject: "First", description: "desc" });
+    await mock.executeTool("TaskCreate", { subject: "Second", description: "desc" });
+
+    const result = await mock.executeTool("TaskUpdate", {
+      tasks: [
+        { taskId: "1", status: "in_progress" },
+        { taskId: "2", owner: "agent-2", addBlockedBy: ["1"] },
+      ],
+    });
+
+    expect(result.content[0].text).toContain("Processed 2 task(s)");
+    expect(result.content[0].text).toContain("Updated task #1 status: pending → in_progress");
+    expect(result.content[0].text).toContain("Updated task #2 owner: none → agent-2; blockedBy: [] → [#1]");
+
+    const first = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(first.content[0].text).toContain("in_progress");
+
+    const second = await mock.executeTool("TaskGet", { taskId: "2" });
+    expect(second.content[0].text).toContain("Owner: agent-2");
+    expect(second.content[0].text).toContain("Blocked by: #1");
+  });
+
+  it("TaskUpdate batch mode reports missing tasks", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Only task", description: "desc" });
+
+    const result = await mock.executeTool("TaskUpdate", {
+      tasks: [
+        { taskId: "1", status: "completed" },
+        { taskId: "999", status: "completed" },
+      ],
+    });
+
+    expect(result.content[0].text).toContain("Updated task #1 status: pending → completed");
+    expect(result.content[0].text).toContain("Task #999 not found");
   });
 
   it("TaskExecute gracefully refuses without subagents", async () => {
@@ -532,6 +570,77 @@ describe("Standalone operation (no subagents extension)", () => {
 });
 
 describe("RPC protocol correctness", () => {
+  it("tasks:rpc:update supports single-task updates", async () => {
+    const mock = mockPi();
+    const replies: unknown[] = [];
+    mock.pi.events.on("tasks:rpc:update:reply:req-1", data => { replies.push(data); });
+    initExtension(mock.pi as any);
+
+    await mock.executeTool("TaskCreate", { subject: "RPC single", description: "desc" });
+    mock.emitEvent("tasks:rpc:update", {
+      requestId: "req-1",
+      taskId: "1",
+      fields: { status: "completed" },
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toEqual({ success: true });
+
+    const result = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(result.content[0].text).toContain("completed");
+  });
+
+  it("tasks:rpc:update supports batch updates", async () => {
+    const mock = mockPi();
+    const replies: unknown[] = [];
+    mock.pi.events.on("tasks:rpc:update:reply:req-2", data => { replies.push(data); });
+    initExtension(mock.pi as any);
+
+    await mock.executeTool("TaskCreate", { subject: "RPC first", description: "desc" });
+    await mock.executeTool("TaskCreate", { subject: "RPC second", description: "desc" });
+    mock.emitEvent("tasks:rpc:update", {
+      requestId: "req-2",
+      tasks: [
+        { taskId: "1", status: "in_progress" },
+        { taskId: "2", fields: { owner: "agent-2", addBlockedBy: ["1"] } },
+      ],
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toEqual({ success: true, ids: ["1", "2"] });
+
+    const first = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(first.content[0].text).toContain("in_progress");
+
+    const second = await mock.executeTool("TaskGet", { taskId: "2" });
+    expect(second.content[0].text).toContain("Owner: agent-2");
+    expect(second.content[0].text).toContain("Blocked by: #1");
+  });
+
+  it("tasks:rpc:update batch reports missing IDs and warnings", async () => {
+    const mock = mockPi();
+    const replies: unknown[] = [];
+    mock.pi.events.on("tasks:rpc:update:reply:req-3", data => { replies.push(data); });
+    initExtension(mock.pi as any);
+
+    await mock.executeTool("TaskCreate", { subject: "RPC existing", description: "desc" });
+    mock.emitEvent("tasks:rpc:update", {
+      requestId: "req-3",
+      tasks: [
+        { taskId: "1", addBlockedBy: ["999"] },
+        { taskId: "999", status: "completed" },
+      ],
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toEqual({
+      success: false,
+      ids: ["1"],
+      missingIds: ["999"],
+      warnings: ["#999 does not exist"],
+    });
+  });
+
   it("ping uses scoped reply channel (not shared channel)", () => {
     const mock = mockPi();
     const emitted: Array<{ channel: string; data: unknown }> = [];
