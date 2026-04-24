@@ -76,6 +76,8 @@ export class TaskWidget {
   private widgetInterval: ReturnType<typeof setInterval> | undefined;
   /** IDs of tasks currently being actively executed (show spinner). */
   private activeTaskIds = new Set<string>();
+  /** Most recent task ID used to anchor the visible window when the list overflows. */
+  private visibleAnchorTaskId: string | undefined;
   /** Per-task runtime metrics keyed by task ID. */
   private metrics = new Map<string, TaskMetrics>();
   /** Per-task budget info keyed by task ID. */
@@ -91,12 +93,14 @@ export class TaskWidget {
 
   setStore(store: TaskStoreLike) {
     this.store = store;
+    this.visibleAnchorTaskId = undefined;
   }
 
   resetActivity() {
     this.activeTaskIds.clear();
     this.metrics.clear();
     this.budgets.clear();
+    this.visibleAnchorTaskId = undefined;
   }
 
   setUICtx(ctx: UICtx) {
@@ -154,6 +158,7 @@ export class TaskWidget {
     visibleTasks: import("../types.js").Task[];
   } {
     if (tasks.length <= MAX_VISIBLE_TASKS) {
+      this.visibleAnchorTaskId = undefined;
       return { visibleStart: 0, visibleTasks: tasks };
     }
 
@@ -161,14 +166,22 @@ export class TaskWidget {
       return task.status === "in_progress" ? index : furthest;
     }, -1);
 
-    if (furthestInProgressIndex < MAX_VISIBLE_TASKS) {
+    let anchorIndex = furthestInProgressIndex;
+    if (furthestInProgressIndex >= 0) {
+      this.visibleAnchorTaskId = tasks[furthestInProgressIndex].id;
+    } else if (this.visibleAnchorTaskId) {
+      anchorIndex = tasks.findIndex(task => task.id === this.visibleAnchorTaskId);
+      if (anchorIndex < 0) this.visibleAnchorTaskId = undefined;
+    }
+
+    if (anchorIndex < MAX_VISIBLE_TASKS) {
       return {
         visibleStart: 0,
         visibleTasks: tasks.slice(0, MAX_VISIBLE_TASKS),
       };
     }
 
-    const targetStart = furthestInProgressIndex - MAX_VISIBLE_TASKS + 1;
+    const targetStart = anchorIndex - MAX_VISIBLE_TASKS + 1;
     let visibleStart = 0;
     while (visibleStart < targetStart && isTerminalStatus(tasks[visibleStart].status)) {
       visibleStart++;
@@ -362,6 +375,7 @@ export class TaskWidget {
     }
     this.widgetRegistered = false;
     this.tui = undefined;
+    this.visibleAnchorTaskId = undefined;
     this.budgets.clear();
     this.cachedTasks = [];
   }

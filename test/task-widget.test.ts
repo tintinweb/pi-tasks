@@ -231,6 +231,43 @@ describe("TaskWidget", () => {
     expect(lines.some(line => line.includes("#12 Task 12"))).toBe(false);
   });
 
+  it("keeps the later task window stable after the active task completes", () => {
+    for (let i = 0; i < 14; i++) {
+      store.create(`Task ${i + 1}`, "Desc", `Working task ${i + 1}`);
+    }
+
+    for (let i = 1; i <= 10; i++) {
+      store.update(String(i), { status: "completed" });
+    }
+    store.update("11", { status: "in_progress" });
+    widget.setActiveTask("11", true);
+    widget.update();
+
+    let lines = renderWidget(ui.state);
+    expect(lines[10]).toContain("Working task 11…");
+    expect(lines.some(line => line.includes("#1 Task 1"))).toBe(false);
+
+    widget.setActiveTask("11", false);
+    store.update("11", { status: "completed" });
+    widget.update();
+
+    lines = renderWidget(ui.state);
+    expect(lines.some(line => line.includes("#1 Task 1"))).toBe(false);
+    expect(lines.some(line => line.includes("#2 Task 2"))).toBe(true);
+    expect(lines.some(line => line.includes("#11 Task 11"))).toBe(true);
+    expect(lines.some(line => line.includes("#12 Task 12"))).toBe(false);
+
+    store.update("12", { status: "in_progress" });
+    widget.setActiveTask("12", true);
+    widget.update();
+
+    lines = renderWidget(ui.state);
+    expect(lines.some(line => line.includes("#1 Task 1"))).toBe(false);
+    expect(lines.some(line => line.includes("#2 Task 2"))).toBe(false);
+    expect(lines.some(line => line.includes("#11 Task 11"))).toBe(true);
+    expect(lines.some(line => line.includes("Working task 12…"))).toBe(true);
+  });
+
   it("tracks token usage for active tasks", () => {
     store.create("Active task", "Desc", "Running");
     store.update("1", { status: "in_progress" });
