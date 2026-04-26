@@ -82,13 +82,13 @@ describe("auto-clear: on_task_complete mode", () => {
     expect(store.get("2")!.blockedBy).toEqual([]);
   });
 
-  it("returns true when tasks are cleared", () => {
+  it("returns cleared=true and ids when tasks are cleared", () => {
     store.create("Task", "Desc");
     store.update("1", { status: "completed" });
     manager.trackCompletion("1", 1);
 
-    expect(manager.onTurnStart(4)).toBe(false);
-    expect(manager.onTurnStart(5)).toBe(true);
+    expect(manager.onTurnStart(4)).toEqual({ cleared: false, ids: [] });
+    expect(manager.onTurnStart(5)).toEqual({ cleared: true, ids: ["1"] });
   });
 });
 
@@ -176,8 +176,10 @@ describe("auto-clear: on_list_complete mode", () => {
     store.update("1", { status: "completed" });
     manager.trackCompletion("1", 1);
 
-    expect(manager.onTurnStart(4)).toBe(false);
-    expect(manager.onTurnStart(5)).toBe(true);
+    expect(manager.onTurnStart(4)).toEqual({ cleared: false, ids: [] });
+    const result = manager.onTurnStart(5);
+    expect(result.cleared).toBe(true);
+    expect(result.ids.sort()).toEqual(["1"]);
   });
 });
 

@@ -60,11 +60,14 @@ export class AutoClearManager {
 
   /**
    * Called on each turn start. Deletes tasks whose linger period has expired.
-   * Returns true if any tasks were cleared.
+   *
+   * Returns the IDs of tasks that were cleared this turn (empty array if none).
+   * The caller can use this list to nudge the LLM (e.g., via a system-reminder)
+   * so it does not later try to update tasks that have silently disappeared.
    */
-  onTurnStart(currentTurn: number): boolean {
+  onTurnStart(currentTurn: number): { cleared: boolean; ids: string[] } {
     const mode = this.getMode();
-    let cleared = false;
+    const ids: string[] = [];
 
     if (mode === "on_task_complete") {
       for (const [taskId, turn] of this.completedAtTurn) {
@@ -75,17 +78,19 @@ export class AutoClearManager {
         } else if (currentTurn - turn >= this.clearDelayTurns) {
           this.getStore().delete(taskId);
           this.completedAtTurn.delete(taskId);
-          cleared = true;
+          ids.push(taskId);
         }
       }
     } else if (mode === "on_list_complete" && this.allCompletedAtTurn !== null) {
       if (currentTurn - this.allCompletedAtTurn >= this.clearDelayTurns) {
+        // Capture IDs before clearing so we can surface them to the caller.
+        const completedIds = this.getStore().list().filter(t => t.status === "completed").map(t => t.id);
         this.getStore().clearCompleted();
         this.allCompletedAtTurn = null;
-        cleared = true;
+        ids.push(...completedIds);
       }
     }
 
-    return cleared;
+    return { cleared: ids.length > 0, ids };
   }
 }
