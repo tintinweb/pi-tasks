@@ -18,6 +18,7 @@ export interface TaskHierarchy {
 export interface TaskHierarchyRow {
   task: Task;
   depth: number;
+  connectorPrefix: string;
   parentId: string | undefined;
   summary: SubtaskSummary;
   readyToComplete: boolean;
@@ -153,13 +154,14 @@ export function flattenTaskHierarchy(hierarchy: TaskHierarchy): TaskHierarchyRow
   const emitted = new Set<string>();
   const rootOrder = hierarchy.hasHierarchy ? byId : byStatusThenId;
 
-  function append(task: Task, depth: number, path: Set<string>) {
+  function append(task: Task, depth: number, connectorPrefix: string, childPrefix: string, path: Set<string>) {
     if (emitted.has(task.id)) return;
     emitted.add(task.id);
 
     rows.push({
       task,
       depth,
+      connectorPrefix,
       parentId: getParentId(task.id, hierarchy),
       summary: getSubtaskSummary(task.id, hierarchy),
       readyToComplete: isReadyToComplete(task, hierarchy),
@@ -170,17 +172,26 @@ export function flattenTaskHierarchy(hierarchy: TaskHierarchy): TaskHierarchyRow
     if (path.has(task.id)) return;
     const nextPath = new Set(path);
     nextPath.add(task.id);
-    for (const child of getChildren(task.id, hierarchy)) {
-      append(child, depth + 1, nextPath);
+    const children = getChildren(task.id, hierarchy);
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index];
+      const isLast = index === children.length - 1;
+      append(
+        child,
+        depth + 1,
+        `${childPrefix}${isLast ? "└─ " : "├─ "}`,
+        `${childPrefix}${isLast ? "   " : "│  "}`,
+        nextPath,
+      );
     }
   }
 
   for (const root of [...hierarchy.roots].sort(rootOrder)) {
-    append(root, 0, new Set());
+    append(root, 0, "", "", new Set());
   }
 
   for (const task of [...hierarchy.tasks].sort(byId)) {
-    append(task, 0, new Set());
+    append(task, 0, "", "", new Set());
   }
 
   return rows;

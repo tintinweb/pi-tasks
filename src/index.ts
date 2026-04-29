@@ -577,8 +577,7 @@ Use TaskGet with a specific task ID to view full details including description a
 
       const hierarchy = buildTaskHierarchy(tasks);
       const lines = flattenTaskHierarchy(hierarchy).map(row => {
-        const indent = row.depth > 0 ? `${"  ".repeat(row.depth)}↳ ` : "";
-        let line = `${indent}#${row.task.id} [${row.task.status}] ${row.task.subject}`;
+        let line = `${row.connectorPrefix}#${row.task.id} [${row.task.status}] ${row.task.subject}`;
 
         if (row.task.owner) {
           line += ` (${row.task.owner})`;

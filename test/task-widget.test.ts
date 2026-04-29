@@ -150,7 +150,7 @@ describe("TaskWidget", () => {
     expect(parentLine).toContain("parallel #3, #4");
 
     const childLine = lines.find(l => l.includes("Docs"));
-    expect(childLine).toMatch(/^\s{4}/);
+    expect(childLine).toContain("├─");
   });
 
   it("shows status summary in header", () => {

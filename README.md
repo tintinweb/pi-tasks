@@ -98,13 +98,13 @@ List all tasks with status, owner, blocked-by info, and hierarchy summaries.
 
 ```
 #1 [pending] Deliver feature [container 1/3 done] [parallel #3, #4]
-  ↳ #2 [completed] Design API
-  ↳ #3 [pending] Implement API
-  ↳ #4 [pending] Write docs
+├─ #2 [completed] Design API
+├─ #3 [pending] Implement API
+└─ #4 [pending] Write docs
 #5 [pending] Validate feature [blocked by #3, #4]
 ```
 
-Flat lists sort pending first, then in-progress, then completed (each group by ID). Hierarchical lists render parent tasks with indented subtasks so container context stays visible.
+Flat lists sort pending first, then in-progress, then completed (each group by ID). Hierarchical lists render parent tasks with tree connectors so container context stays visible.
 
 ### `TaskGet`
 

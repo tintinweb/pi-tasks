@@ -556,7 +556,8 @@ describe("Standalone operation (no subagents extension)", () => {
 
     const list = await mock.executeTool("TaskList", {});
     expect(list.content[0].text).toContain("#1 [pending] Ship feature [container 0/2 done] [parallel #2, #3]");
-    expect(list.content[0].text).toContain("  ↳ #2 [pending] Build API");
+    expect(list.content[0].text).toContain("├─ #2 [pending] Build API");
+    expect(list.content[0].text).toContain("└─ #3 [pending] Write docs");
 
     const parent = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(parent.content[0].text).toContain("Subtasks: #2, #3");
