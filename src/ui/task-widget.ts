@@ -9,6 +9,12 @@
  */
 
 import { truncateToWidth } from "@mariozechner/pi-tui";
+import {
+  buildTaskHierarchy,
+  flattenTaskHierarchy,
+  formatTaskRefs,
+  getOpenBlockerIds,
+} from "../hierarchy.js";
 import type { TaskStore } from "../task-store.js";
 
 // ---- Types ----
@@ -137,10 +143,13 @@ export class TaskWidget {
     const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
-    const visible = tasks.slice(0, MAX_VISIBLE_TASKS);
-    for (let i = 0; i < visible.length; i++) {
-      const task = visible[i];
+    const hierarchy = buildTaskHierarchy(tasks);
+    const rows = flattenTaskHierarchy(hierarchy);
+    const visible = rows.slice(0, MAX_VISIBLE_TASKS);
+    for (const row of visible) {
+      const task = row.task;
       const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
+      const indent = "  ".repeat(row.depth);
 
       let icon: string;
       if (isActive) {
@@ -153,16 +162,17 @@ export class TaskWidget {
         icon = "◻";
       }
 
-      let suffix = "";
-      if (task.status === "pending" && task.blockedBy.length > 0) {
-        const openBlockers = task.blockedBy.filter(bid => {
-          const blocker = this.store.get(bid);
-          return blocker && blocker.status !== "completed";
-        });
-        if (openBlockers.length > 0) {
-          suffix = theme.fg("dim", ` › blocked by ${openBlockers.map(id => "#" + id).join(", ")}`);
-        }
+      const suffixParts: string[] = [];
+      if (row.summary.total > 0) {
+        suffixParts.push(`${row.summary.completed}/${row.summary.total} subtasks`);
+        if (row.readyToComplete) suffixParts.push("ready to complete");
+        if (row.availableChildIds.length > 1) suffixParts.push(`parallel ${formatTaskRefs(row.availableChildIds)}`);
       }
+      const openBlockers = getOpenBlockerIds(task, hierarchy);
+      if (task.status === "pending" && openBlockers.length > 0) {
+        suffixParts.push(`blocked by ${formatTaskRefs(openBlockers)}`);
+      }
+      const suffix = suffixParts.length > 0 ? theme.fg("dim", ` › ${suffixParts.join(" · ")}`) : "";
 
       let text: string;
       if (isActive) {
@@ -180,21 +190,21 @@ export class TaskWidget {
             ? ` ${theme.fg("dim", `(${elapsed} · ${tokenParts.join(" ")})`)}`
             : ` ${theme.fg("dim", `(${elapsed})`)}`;
         }
-        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
+        text = `  ${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${theme.fg("accent", form + agentLabel + "…")}${stats}`;
       } else if (task.status === "completed") {
-        text = `  ${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}`;
+        text = `  ${indent}${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}`;
       } else {
         const agentSuffix = task.status === "in_progress" && task.metadata?.agentId
           ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
           : "";
-        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}`;
+        text = `  ${indent}${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}`;
       }
 
       lines.push(truncate(text + suffix));
     }
 
-    if (tasks.length > MAX_VISIBLE_TASKS) {
-      lines.push(truncate(theme.fg("dim", `    … and ${tasks.length - MAX_VISIBLE_TASKS} more`)));
+    if (rows.length > MAX_VISIBLE_TASKS) {
+      lines.push(truncate(theme.fg("dim", `    … and ${rows.length - MAX_VISIBLE_TASKS} more`)));
     }
 
     return lines;

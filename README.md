@@ -94,15 +94,17 @@ Create one or more structured tasks. Pass `tasks`, an array of task objects; use
 
 ### `TaskList`
 
-List all tasks with status, owner, and blocked-by info.
+List all tasks with status, owner, blocked-by info, and hierarchy summaries.
 
 ```
-#1 [pending] Fix authentication bug
-#2 [in_progress] Write unit tests (agent-1)
-#3 [pending] Update docs [blocked by #1, #2]
+#1 [pending] Deliver feature [container 1/3 done] [parallel #3, #4]
+  ↳ #2 [completed] Design API
+  ↳ #3 [pending] Implement API
+  ↳ #4 [pending] Write docs
+#5 [pending] Validate feature [blocked by #3, #4]
 ```
 
-Sort order: pending first, then in-progress, then completed (each group by ID).
+Flat lists sort pending first, then in-progress, then completed (each group by ID). Hierarchical lists render parent tasks with indented subtasks so container context stays visible.
 
 ### `TaskGet`
 
@@ -113,12 +115,14 @@ Task #2: Write unit tests
 Status: in_progress
 Owner: agent-1
 Description: Add tests for the auth module
+Parent: #1
+Parallel siblings: #4
 Blocked by: #1
 Blocks: #3
-Relations: validates #1
+Relations: parent #1, validates #1
 ```
 
-Shows owner (if set), open (non-completed) dependency edges, and non-blocking relationships. Non-empty metadata is displayed as JSON.
+For parent tasks, `TaskGet` also shows direct subtasks, aggregate subtask progress, available parallel subtasks, and ready-to-complete hints. Shows owner (if set), open dependency edges, and non-blocking relationships. Non-empty metadata is displayed as JSON.
 
 ### `TaskUpdate`
 
@@ -201,15 +205,50 @@ pending → in_progress → completed
 
 Tasks are created as `pending`. Mark `in_progress` before starting work, `completed` when done. `deleted` removes entirely — IDs never reset.
 
-## Dependency and Relationship Management
+## Dependency, Hierarchy, and Relationship Management
 
 - **Batch creation:** `TaskCreate` can create tasks and resolve temporary `key` references in one atomic mutation
 - **Bidirectional hard edges:** `blocks`/`blockedBy` and `addBlocks`/`addBlockedBy` maintain both sides automatically
+- **Hierarchy:** `relations: [{ "type": "parent", "target": "..." }]` nests a subtask under a parent/container task
+- **Parallel subtasks:** Siblings under the same parent with no hard dependency edge between them are shown as parallel-capable; multiple currently unblocked children are shown as `parallel #...`
 - **Non-blocking relations:** `relations`, `setRelations`, `addRelations`, and `removeRelations` record structure without blocking execution
+- **Completion hints:** Parent tasks show aggregate subtask progress and are reported as ready to complete once all subtasks are completed
 - **Dependency warnings:** cycles, self-dependencies, and references to non-existent tasks are stored but produce warnings in the tool response
 - **Display-time filtering:** `TaskList` only shows non-completed blockers in `[blocked by ...]`
 - **Raw data preserved:** `TaskGet` shows all hard edges and non-blocking relations
 - **Cleanup on deletion:** removing a task cleans up hard edges and relations pointing to it
+
+Example nested task set:
+
+```json
+{
+  "tasks": [
+    { "key": "feature", "subject": "Deliver feature", "description": "Container task" },
+    {
+      "key": "api",
+      "subject": "Implement API",
+      "description": "Build the endpoint",
+      "relations": [{ "type": "parent", "target": "feature" }]
+    },
+    {
+      "key": "docs",
+      "subject": "Write docs",
+      "description": "Document the endpoint",
+      "relations": [{ "type": "parent", "target": "feature" }]
+    },
+    {
+      "key": "validate",
+      "subject": "Validate feature",
+      "description": "Run checks after implementation and docs",
+      "blockedBy": ["api", "docs"],
+      "relations": [
+        { "type": "parent", "target": "feature" },
+        { "type": "validates", "target": "feature" }
+      ]
+    }
+  ]
+}
+```
 
 ## Task Storage
 

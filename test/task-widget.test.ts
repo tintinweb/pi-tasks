@@ -134,6 +134,25 @@ describe("TaskWidget", () => {
     expect(blockedLine).not.toContain("blocked by");
   });
 
+  it("renders hierarchy with parent progress and parallel children", () => {
+    store.createMany([
+      { key: "feature", subject: "Feature", description: "Parent" },
+      { key: "api", subject: "API", description: "API work", relations: [{ type: "parent", target: "feature" }] },
+      { key: "docs", subject: "Docs", description: "Docs work", relations: [{ type: "parent", target: "feature" }] },
+      { key: "tests", subject: "Tests", description: "Test work", relations: [{ type: "parent", target: "feature" }] },
+    ]);
+    store.update("2", { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    const parentLine = lines.find(l => l.includes("Feature"));
+    expect(parentLine).toContain("1/3 subtasks");
+    expect(parentLine).toContain("parallel #3, #4");
+
+    const childLine = lines.find(l => l.includes("Docs"));
+    expect(childLine).toMatch(/^\s{4}/);
+  });
+
   it("shows status summary in header", () => {
     store.create("Task A", "Desc");
     store.create("Task B", "Desc");

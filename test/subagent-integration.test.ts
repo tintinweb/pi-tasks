@@ -545,6 +545,37 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(list.content[0].text).not.toContain("#2");
   });
 
+  it("TaskList and TaskGet expose hierarchy and parallel subtasks", async () => {
+    await mock.executeTool("TaskCreate", {
+      tasks: [
+        { key: "feature", subject: "Ship feature", description: "Parent container" },
+        { key: "api", subject: "Build API", description: "API work", relations: [{ type: "parent", target: "feature" }] },
+        { key: "docs", subject: "Write docs", description: "Docs work", relations: [{ type: "parent", target: "feature" }] },
+      ],
+    });
+
+    const list = await mock.executeTool("TaskList", {});
+    expect(list.content[0].text).toContain("#1 [pending] Ship feature [container 0/2 done] [parallel #2, #3]");
+    expect(list.content[0].text).toContain("  ↳ #2 [pending] Build API");
+
+    const parent = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(parent.content[0].text).toContain("Subtasks: #2, #3");
+    expect(parent.content[0].text).toContain("Subtask progress: 0/2 completed");
+    expect(parent.content[0].text).toContain("Available parallel subtasks: #2, #3");
+
+    const child = await mock.executeTool("TaskGet", { taskId: "2" });
+    expect(child.content[0].text).toContain("Parent: #1");
+    expect(child.content[0].text).toContain("Parallel siblings: #3");
+
+    const done = await mock.executeTool("TaskUpdate", {
+      updates: [
+        { taskId: "2", status: "completed" },
+        { taskId: "3", status: "completed" },
+      ],
+    });
+    expect(done.content[0].text).toContain("Ready to complete: #1 (2/2 subtasks done)");
+  });
+
   it("TaskExecute gracefully refuses without subagents", async () => {
     await mock.executeTool("TaskCreate", {
       subject: "Agent task",

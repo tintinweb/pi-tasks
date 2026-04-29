@@ -19,6 +19,18 @@ import { join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { AutoClearManager } from "./auto-clear.js";
+import {
+  buildTaskHierarchy,
+  flattenTaskHierarchy,
+  formatTaskRefs,
+  getAvailableChildIds,
+  getChildren,
+  getOpenBlockerIds,
+  getParallelSiblingIds,
+  getParentId,
+  getReadyParentIds,
+  getSubtaskSummary,
+} from "./hierarchy.js";
 import { ProcessTracker } from "./process-tracker.js";
 import { TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
@@ -553,7 +565,9 @@ Returns a summary of each task:
 - **status**: 'pending', 'in_progress', or 'completed'
 - **owner**: Agent ID if assigned, empty if available
 - **blockedBy**: List of open task IDs that must be resolved first (tasks with blockedBy cannot be claimed until dependencies resolve)
+- **container progress**: Parent tasks show subtask completion and ready-to-complete hints
 
+Container rows group subtasks; prefer claiming unblocked leaf tasks unless the parent itself has explicit work.
 Use TaskGet with a specific task ID to view full details including description and comments.`,
     parameters: Type.Object({}),
 
@@ -561,30 +575,24 @@ Use TaskGet with a specific task ID to view full details including description a
       const tasks = store.list();
       if (tasks.length === 0) return Promise.resolve(textResult("No tasks found"));
 
-      // Sort: pending first (by ID), then in_progress (by ID), then completed (by ID)
-      const statusOrder: Record<string, number> = { pending: 0, in_progress: 1, completed: 2 };
-      const sorted = [...tasks].sort((a, b) => {
-        const so = (statusOrder[a.status] ?? 0) - (statusOrder[b.status] ?? 0);
-        if (so !== 0) return so;
-        return Number(a.id) - Number(b.id);
-      });
+      const hierarchy = buildTaskHierarchy(tasks);
+      const lines = flattenTaskHierarchy(hierarchy).map(row => {
+        const indent = row.depth > 0 ? `${"  ".repeat(row.depth)}↳ ` : "";
+        let line = `${indent}#${row.task.id} [${row.task.status}] ${row.task.subject}`;
 
-      const lines = sorted.map(task => {
-        let line = `#${task.id} [${task.status}] ${task.subject}`;
-
-        if (task.owner) {
-          line += ` (${task.owner})`;
+        if (row.task.owner) {
+          line += ` (${row.task.owner})`;
         }
 
-        // Only show non-completed blockers
-        if (task.blockedBy.length > 0) {
-          const openBlockers = task.blockedBy.filter(bid => {
-            const blocker = store.get(bid);
-            return blocker && blocker.status !== "completed";
-          });
-          if (openBlockers.length > 0) {
-            line += ` [blocked by ${openBlockers.map(id => "#" + id).join(", ")}]`;
-          }
+        if (row.summary.total > 0) {
+          line += ` [container ${row.summary.completed}/${row.summary.total} done]`;
+          if (row.readyToComplete) line += " [ready to complete]";
+          if (row.availableChildIds.length > 1) line += ` [parallel ${formatTaskRefs(row.availableChildIds)}]`;
+        }
+
+        const openBlockers = getOpenBlockerIds(row.task, hierarchy);
+        if (openBlockers.length > 0) {
+          line += ` [blocked by ${formatTaskRefs(openBlockers)}]`;
         }
 
         return line;
@@ -617,6 +625,7 @@ Returns full task details:
 - **status**: 'pending', 'in_progress', or 'completed'
 - **blocks**: Tasks waiting on this one to complete
 - **blockedBy**: Tasks that must complete before this one can start
+- **parent/subtasks**: Hierarchy, aggregate progress, parallel-capable siblings, and ready-to-complete hints
 
 ## Tips
 
@@ -642,17 +651,37 @@ Returns full task details:
       }
       lines.push(`Description: ${desc}`);
 
-      if (task.blockedBy.length > 0) {
-        const openBlockers = task.blockedBy.filter(bid => {
-          const blocker = store.get(bid);
-          return blocker && blocker.status !== "completed";
-        });
-        if (openBlockers.length > 0) {
-          lines.push(`Blocked by: ${openBlockers.map(id => "#" + id).join(", ")}`);
+      const hierarchy = buildTaskHierarchy(store.list());
+      const parentId = getParentId(task.id, hierarchy);
+      if (parentId) {
+        lines.push(`Parent: #${parentId}`);
+      }
+
+      const children = getChildren(task.id, hierarchy);
+      if (children.length > 0) {
+        const summary = getSubtaskSummary(task.id, hierarchy);
+        lines.push(`Subtasks: ${formatTaskRefs(children.map(child => child.id))}`);
+        lines.push(`Subtask progress: ${summary.completed}/${summary.total} completed`);
+        const availableChildIds = getAvailableChildIds(task.id, hierarchy);
+        if (availableChildIds.length > 1) {
+          lines.push(`Available parallel subtasks: ${formatTaskRefs(availableChildIds)}`);
+        }
+        if (summary.allCompleted && task.status !== "completed") {
+          lines.push("All subtasks are complete; consider marking this parent completed.");
         }
       }
+
+      const parallelSiblingIds = getParallelSiblingIds(task.id, hierarchy);
+      if (parallelSiblingIds.length > 0) {
+        lines.push(`Parallel siblings: ${formatTaskRefs(parallelSiblingIds)}`);
+      }
+
+      const openBlockers = getOpenBlockerIds(task, hierarchy);
+      if (openBlockers.length > 0) {
+        lines.push(`Blocked by: ${formatTaskRefs(openBlockers)}`);
+      }
       if (task.blocks.length > 0) {
-        lines.push(`Blocks: ${task.blocks.map(id => "#" + id).join(", ")}`);
+        lines.push(`Blocks: ${formatTaskRefs(task.blocks)}`);
       }
       if (task.relations.length > 0) {
         lines.push(`Relations: ${formatRelations(task.relations)}`);
@@ -760,6 +789,16 @@ Add a soft ordering relationship:
       }
 
       if (warnings.length > 0) lines.push(`Warnings: ${warnings.join("; ")}`);
+      if (updates.some(update => update.status === "completed" || update.status === "deleted")) {
+        const hierarchy = buildTaskHierarchy(store.list());
+        const readyParents = getReadyParentIds(hierarchy);
+        if (readyParents.length > 0) {
+          lines.push(`Ready to complete: ${readyParents.map(id => {
+            const summary = getSubtaskSummary(id, hierarchy);
+            return `#${id} (${summary.completed}/${summary.total} subtasks done)`;
+          }).join(", ")}`);
+        }
+      }
       widget.update();
       return Promise.resolve(textResult(lines.join("\n")));
     },
