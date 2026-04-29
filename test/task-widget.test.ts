@@ -107,8 +107,8 @@ describe("TaskWidget", () => {
     const lines = renderWidget(ui.state);
     // Should show activeForm text with "…" suffix
     expect(lines[1]).toContain("Processing data…");
-    // Should show a uniform spinner frame, not the static in-progress icon
-    expect(lines[1]).toMatch(/[◐◓◑◒]/);
+    // Should show a braille spinner frame, not the static in-progress icon
+    expect(lines[1]).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
     expect(lines[1]).not.toContain("◼");
   });
 

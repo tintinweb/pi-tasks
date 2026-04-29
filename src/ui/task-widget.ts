@@ -5,7 +5,7 @@
  *   ✔ completed tasks (strikethrough + dim)
  *   ◼ in_progress tasks
  *   ◻ pending tasks
- *   ◐/◓/◑/◒ actively executing task (spinner with activeForm text)
+ *   ⠋/⠙/⠹/⠸ actively executing task (spinner with activeForm text)
  */
 
 import { truncateToWidth } from "@mariozechner/pi-tui";
@@ -34,9 +34,9 @@ export type UICtx = {
   ): void;
 };
 
-/** Uniform-width spinner frames for animated active task indicators. */
-const SPINNER = ["◐", "◓", "◑", "◒"];
-const SPINNER_INTERVAL_MS = 250;
+/** Pi-style braille spinner frames for animated active task indicators. */
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_INTERVAL_MS = 180;
 
 const MAX_VISIBLE_TASKS = 10;
 
