@@ -5,7 +5,7 @@
  *   ✔ completed tasks (strikethrough + dim)
  *   ◼ in_progress tasks
  *   ◻ pending tasks
- *   ✳/✽ actively executing task (star spinner with activeForm text)
+ *   ◐/◓/◑/◒ actively executing task (spinner with activeForm text)
  */
 
 import { truncateToWidth } from "@mariozechner/pi-tui";
@@ -34,8 +34,9 @@ export type UICtx = {
   ): void;
 };
 
-/** Star spinner frames for animated active task indicator (matches Claude Code). */
-const SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
+/** Uniform-width spinner frames for animated active task indicators. */
+const SPINNER = ["◐", "◓", "◑", "◒"];
+const SPINNER_INTERVAL_MS = 250;
 
 const MAX_VISIBLE_TASKS = 10;
 
@@ -118,7 +119,7 @@ export class TaskWidget {
   /** Ensure the widget update timer is running. */
   ensureTimer() {
     if (!this.widgetInterval) {
-      this.widgetInterval = setInterval(() => this.update(), 150);
+      this.widgetInterval = setInterval(() => this.update(), SPINNER_INTERVAL_MS);
     }
   }
 

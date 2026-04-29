@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 ## Features
 
 - **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — for task creation, updates, execution, and inspection
-- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time and token counts
+- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, and a smooth spinner (`◐◓◑◒`) for active tasks with elapsed time and token counts
 - **System-reminder injection** — periodic `<system-reminder>` nudges appended to tool results when task tools haven't been used recently (matches Claude Code's behavior exactly)
 - **Prompt guidelines** — workflow contract encoded in tool descriptions, nudging the LLM at the point of tool use
 - **Dependency and relationship management** — hard `blocks`/`blockedBy` dependencies plus non-blocking relationships such as `parent`, `related`, `validates`, `supersedes`, and `orderAfter`
@@ -41,7 +41,7 @@ The extension renders a persistent widget above the editor:
 ```
 ● 4 tasks (1 done, 1 in progress, 2 open)
   ✔ #1 Design the flux capacitor
-  ✳ #2 Acquiring plutonium… (2m 49s · ↑ 4.1k ↓ 1.2k)
+  ◓ #2 Acquiring plutonium… (2m 49s · ↑ 4.1k ↓ 1.2k)
   ◻ #3 Install flux capacitor in DeLorean › blocked by #1
   ◻ #4 Test time travel at 88 mph › blocked by #2, #3
 ```
@@ -51,7 +51,7 @@ The extension renders a persistent widget above the editor:
 | `✔` | Completed (strikethrough + dim) |
 | `◼` | In-progress (not actively executing) |
 | `◻` | Pending |
-| `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, token counts) |
+| `◐`/`◓`/`◑`/`◒` | Animated spinner — actively executing task (shows `activeForm` text, elapsed time, token counts) |
 
 ## Tools
 
