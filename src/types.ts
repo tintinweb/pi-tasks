@@ -4,6 +4,55 @@
 
 export type TaskStatus = "pending" | "in_progress" | "completed";
 
+export type TaskRelationType = "parent" | "related" | "validates" | "supersedes" | "orderAfter" | (string & {});
+
+export interface TaskRelation {
+  type: TaskRelationType;
+  target: string;
+}
+
+export interface TaskCreateInput {
+  key?: string;
+  subject: string;
+  description: string;
+  activeForm?: string;
+  agentType?: string;
+  metadata?: Record<string, any>;
+  blocks?: string[];
+  blockedBy?: string[];
+  relations?: TaskRelation[];
+}
+
+export interface TaskUpdateFields {
+  status?: TaskStatus | "deleted";
+  subject?: string;
+  description?: string;
+  activeForm?: string;
+  owner?: string;
+  metadata?: Record<string, any>;
+  addBlocks?: string[];
+  addBlockedBy?: string[];
+  setRelations?: TaskRelation[];
+  addRelations?: TaskRelation[];
+  removeRelations?: TaskRelation[];
+}
+
+export interface TaskMutationResult {
+  task: Task | undefined;
+  changedFields: string[];
+  warnings: string[];
+}
+
+export interface TaskCreateManyResult {
+  tasks: Task[];
+  warnings: string[];
+}
+
+export interface TaskUpdateManyResult {
+  results: TaskMutationResult[];
+  warnings: string[];
+}
+
 export interface Task {
   id: string;
   subject: string;
@@ -14,6 +63,7 @@ export interface Task {
   metadata: Record<string, any>;
   blocks: string[];
   blockedBy: string[];
+  relations: TaskRelation[];
   createdAt: number;
   updatedAt: number;
 }

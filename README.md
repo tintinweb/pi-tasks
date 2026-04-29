@@ -12,11 +12,11 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 
 ## Features
 
-- **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
+- **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — for task creation, updates, execution, and inspection
 - **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time and token counts
 - **System-reminder injection** — periodic `<system-reminder>` nudges appended to tool results when task tools haven't been used recently (matches Claude Code's behavior exactly)
 - **Prompt guidelines** — workflow contract encoded in tool descriptions, nudging the LLM at the point of tool use
-- **Dependency management** — bidirectional `blocks`/`blockedBy` relationships with warnings for cycles, self-deps, and dangling references
+- **Dependency and relationship management** — hard `blocks`/`blockedBy` dependencies plus non-blocking relationships such as `parent`, `related`, `validates`, `supersedes`, and `orderAfter`
 - **Shared task lists** — multiple pi sessions can share a file-backed task list for agent team coordination
 - **File locking** — concurrent access is safe when multiple sessions share a task list
 - **Background process tracking** — track spawned processes with output buffering, blocking wait, and graceful stop
@@ -57,18 +57,39 @@ The extension renders a persistent widget above the editor:
 
 ### `TaskCreate`
 
-Create a structured task. Used proactively for complex multi-step work.
+Create one or more structured tasks. Pass `tasks`, an array of task objects; use one element for a single task.
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
+| Task field | Type | Required | Description |
+|------------|------|----------|-------------|
+| `key` | string | no | Temporary key for references inside this create call |
 | `subject` | string | yes | Brief imperative title |
 | `description` | string | yes | Detailed context and acceptance criteria |
 | `activeForm` | string | no | Present continuous form for spinner (e.g., "Running tests") |
 | `agentType` | string | no | Agent type for subagent execution (e.g., `"general-purpose"`, `"Explore"`) |
 | `metadata` | object | no | Arbitrary key-value pairs |
+| `blocks` | string[] | no | Task IDs or keys this task blocks |
+| `blockedBy` | string[] | no | Task IDs or keys that block this task |
+| `relations` | object[] | no | Non-blocking relationships with `type` and `target` |
+
+```json
+{
+  "tasks": [
+    { "key": "design", "subject": "Design API", "description": "Decide the shape" },
+    {
+      "key": "docs",
+      "subject": "Document API",
+      "description": "Write usage notes",
+      "blockedBy": ["design"],
+      "relations": [{ "type": "validates", "target": "design" }]
+    }
+  ]
+}
+```
 
 ```
-→ Task #1 created successfully: Fix authentication bug
+→ Created 2 tasks:
+#1 Design API
+#2 Document API
 ```
 
 ### `TaskList`
@@ -94,16 +115,17 @@ Owner: agent-1
 Description: Add tests for the auth module
 Blocked by: #1
 Blocks: #3
+Relations: validates #1
 ```
 
-Shows owner (if set) and open (non-completed) dependency edges. Non-empty metadata is displayed as JSON.
+Shows owner (if set), open (non-completed) dependency edges, and non-blocking relationships. Non-empty metadata is displayed as JSON.
 
 ### `TaskUpdate`
 
-Update task fields, status, metadata, and dependencies.
+Update one or more tasks. Pass `updates`, an array of update objects; use one element for a single task.
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
+| Update field | Type | Description |
+|--------------|------|-------------|
 | `taskId` | string | Task ID (required) |
 | `status` | `pending` / `in_progress` / `completed` / `deleted` | New status |
 | `subject` | string | New title |
@@ -111,20 +133,29 @@ Update task fields, status, metadata, and dependencies.
 | `activeForm` | string | Spinner text |
 | `owner` | string | Agent name |
 | `metadata` | object | Shallow merge (null values delete keys) |
-| `addBlocks` | string[] | Task IDs this task blocks |
-| `addBlockedBy` | string[] | Task IDs that block this task |
+| `addBlocks` | string[] | Hard dependencies this task blocks |
+| `addBlockedBy` | string[] | Hard dependencies that block this task |
+| `setRelations` | object[] | Replace non-blocking relationships |
+| `addRelations` | object[] | Add non-blocking relationships |
+| `removeRelations` | object[] | Remove matching non-blocking relationships |
+
+```json
+{
+  "updates": [
+    { "taskId": "1", "status": "completed" },
+    { "taskId": "2", "status": "deleted" }
+  ]
+}
+```
 
 ```
 → Updated task #1 status
-→ Updated task #2 owner, status
-→ Updated task #3 blocks
-→ Updated task #3 blocks (warning: cycle: #3 and #1 block each other)
-→ Updated task #1 deleted
+→ Updated task #2 deleted
 ```
 
 Setting `status: "deleted"` permanently removes the task.
 
-Dependencies are bidirectional: `addBlocks: ["3"]` on task 1 also adds `blockedBy: ["1"]` to task 3.
+Dependencies are bidirectional: `addBlocks: ["3"]` on task 1 also adds `blockedBy: ["1"]` to task 3. Non-blocking `relations` are directional structure only and do not affect whether a task can start.
 
 ### `TaskOutput`
 
@@ -170,13 +201,15 @@ pending → in_progress → completed
 
 Tasks are created as `pending`. Mark `in_progress` before starting work, `completed` when done. `deleted` removes entirely — IDs never reset.
 
-## Dependency Management
+## Dependency and Relationship Management
 
-- **Bidirectional edges:** `addBlocks`/`addBlockedBy` maintain both sides automatically
+- **Batch creation:** `TaskCreate` can create tasks and resolve temporary `key` references in one atomic mutation
+- **Bidirectional hard edges:** `blocks`/`blockedBy` and `addBlocks`/`addBlockedBy` maintain both sides automatically
+- **Non-blocking relations:** `relations`, `setRelations`, `addRelations`, and `removeRelations` record structure without blocking execution
 - **Dependency warnings:** cycles, self-dependencies, and references to non-existent tasks are stored but produce warnings in the tool response
 - **Display-time filtering:** `TaskList` only shows non-completed blockers in `[blocked by ...]`
-- **Raw data preserved:** `TaskGet` shows ALL edges, including completed blockers
-- **Cleanup on deletion:** removing a task cleans up all edges pointing to it
+- **Raw data preserved:** `TaskGet` shows all hard edges and non-blocking relations
+- **Cleanup on deletion:** removing a task cleans up hard edges and relations pointing to it
 
 ## Task Storage
 

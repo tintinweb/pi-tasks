@@ -2,10 +2,10 @@
  * @tintinweb/pi-tasks — A pi extension providing Claude Code-style task tracking and coordination.
  *
  * Tools:
- *   TaskCreate   — Create a structured task
+ *   TaskCreate   — Create one or more structured tasks
  *   TaskList     — List all tasks with status
  *   TaskGet      — Get full task details
- *   TaskUpdate   — Update task fields, status, dependencies
+ *   TaskUpdate   — Update task fields, status, dependencies, and relations
  *   TaskOutput   — Get output from a background task process
  *   TaskStop     — Stop a running background task process
  *   TaskExecute  — Execute tasks as subagents (requires @tintinweb/pi-subagents)
@@ -22,6 +22,7 @@ import { AutoClearManager } from "./auto-clear.js";
 import { ProcessTracker } from "./process-tracker.js";
 import { TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
+import type { TaskCreateInput, TaskRelation, TaskUpdateFields } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
 
@@ -36,6 +37,63 @@ function debug(...args: unknown[]) {
 
 function textResult(msg: string) {
   return { content: [{ type: "text" as const, text: msg }], details: undefined as any };
+}
+
+const TaskRelationSchema = Type.Object({
+  type: Type.String({ description: "Relationship type, e.g. parent, related, validates, supersedes, or orderAfter" }),
+  target: Type.String({ description: "Target task ID, or a create-batch key when used inside TaskCreate" }),
+});
+
+const TaskCreateItemSchema = Type.Object({
+  key: Type.Optional(Type.String({ description: "Temporary key for references within this TaskCreate call" })),
+  subject: Type.String({ description: "A brief title for the task" }),
+  description: Type.String({ description: "A detailed description of what needs to be done" }),
+  activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in the spinner when in_progress" })),
+  agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution" })),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
+  blocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs or create-batch keys this task blocks" })),
+  blockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs or create-batch keys that block this task" })),
+  relations: Type.Optional(Type.Array(TaskRelationSchema, { description: "Non-blocking task relationships" })),
+});
+
+const TaskUpdateItemSchema = Type.Object({
+  taskId: Type.String({ description: "The ID of the task to update" }),
+  status: Type.Optional(Type.Unsafe<"pending" | "in_progress" | "completed" | "deleted">({
+    type: "string",
+    enum: ["pending", "in_progress", "completed", "deleted"],
+    description: "New status for the task",
+  })),
+  subject: Type.Optional(Type.String({ description: "New subject for the task" })),
+  description: Type.Optional(Type.String({ description: "New description for the task" })),
+  activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in the spinner when in_progress" })),
+  owner: Type.Optional(Type.String({ description: "New owner for the task" })),
+  metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Metadata keys to merge into the task. Set a key to null to delete it." })),
+  addBlocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks" })),
+  addBlockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task" })),
+  setRelations: Type.Optional(Type.Array(TaskRelationSchema, { description: "Replace non-blocking relationships for this task" })),
+  addRelations: Type.Optional(Type.Array(TaskRelationSchema, { description: "Add non-blocking relationships to this task" })),
+  removeRelations: Type.Optional(Type.Array(TaskRelationSchema, { description: "Remove matching non-blocking relationships from this task" })),
+});
+
+type TaskCreateToolParams = { tasks?: TaskCreateInput[] } & Partial<TaskCreateInput>;
+type TaskUpdateToolParams = { updates?: Array<TaskUpdateFields & { taskId: string }>; taskId?: string } & TaskUpdateFields;
+
+function normalizeTaskCreateParams(params: TaskCreateToolParams): TaskCreateInput[] {
+  if (Array.isArray(params.tasks)) return params.tasks;
+  if (typeof params.subject !== "string" || typeof params.description !== "string") return [];
+  const { tasks: _tasks, ...task } = params;
+  return [task as TaskCreateInput];
+}
+
+function normalizeTaskUpdateParams(params: TaskUpdateToolParams): Array<TaskUpdateFields & { taskId: string }> {
+  if (Array.isArray(params.updates)) return params.updates;
+  if (typeof params.taskId !== "string") return [];
+  const { updates: _updates, ...update } = params;
+  return [update as TaskUpdateFields & { taskId: string }];
+}
+
+function formatRelations(relations: TaskRelation[]): string {
+  return relations.map(relation => `${relation.type} #${relation.target}`).join(", ");
 }
 
 /** Task tool names — used to detect task tool usage for reminder suppression. */
@@ -398,7 +456,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "TaskCreate",
     label: "TaskCreate",
-    description: `Use this tool to create a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+    description: `Use this tool to create one or more structured tasks for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
 It also helps the user understand the progress of the task and overall progress of their requests.
 
 ## When to Use This Tool
@@ -409,10 +467,9 @@ Use this tool proactively in these scenarios:
 - Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
 - Plan mode - When using plan mode, create a task list to track the work
 - User explicitly requests todo list - When the user directly asks you to use the todo list
-- User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
+- User provides multiple tasks - Create the visible task set in one call
 - After receiving new instructions - Immediately capture user requirements as tasks
-- When you start working on a task - Mark it as in_progress BEFORE beginning work
-- After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
+- After completing a task - Add any newly discovered follow-up tasks
 
 ## When NOT to Use This Tool
 
@@ -424,41 +481,50 @@ Skip using this tool when:
 
 NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
 
-## Task Fields
+## Parameters
 
-- **subject**: A brief, actionable title in imperative form (e.g., "Fix authentication bug in login flow")
-- **description**: Detailed description of what needs to be done, including context and acceptance criteria
-- **activeForm** (optional): Present continuous form shown in the spinner when the task is in_progress (e.g., "Fixing authentication bug"). If omitted, the spinner shows the subject instead.
+Pass \`tasks\`, an array of task objects. Use one element for a single task.
+
+Each task supports:
+- **key**: Temporary key for references inside this create call
+- **subject**: A brief, actionable title in imperative form
+- **description**: Detailed context and acceptance criteria
+- **activeForm**: Present continuous form shown in the spinner when in_progress
+- **agentType**: Agent type for subagent execution via TaskExecute
+- **metadata**: Arbitrary metadata
+- **blocks** / **blockedBy**: Hard dependencies using task IDs or keys from this call
+- **relations**: Non-blocking relationships, e.g. \`parent\`, \`related\`, \`validates\`, \`supersedes\`, or \`orderAfter\`
 
 All tasks are created with status \`pending\`.
 
 ## Tips
 
-- Create tasks with clear, specific subjects that describe the outcome
-- Include enough detail in the description for another agent to understand and complete the task
-- After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
-- Check TaskList first to avoid creating duplicate tasks
-- Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute`,
+- Create small, scan-friendly task sets instead of many separate tool calls
+- Use \`key\` plus \`blockedBy\` to create tasks and their hard dependencies atomically
+- Use \`relations\` for structure that should not block execution
+- Check TaskList first to avoid creating duplicate tasks`,
     promptGuidelines: [
       "When working on complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status.",
       "Mark tasks as in_progress before starting work and completed when done.",
       "Use TaskList to check for available work after completing a task.",
     ],
     parameters: Type.Object({
-      subject: Type.String({ description: "A brief title for the task" }),
-      description: Type.String({ description: "A detailed description of what needs to be done" }),
-      activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
-      agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
-      metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
+      tasks: Type.Array(TaskCreateItemSchema, { description: "Tasks to create. Use one element for a single task.", minItems: 1 }),
     }),
 
-    execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+    execute(_toolCallId, params: TaskCreateToolParams, _signal, _onUpdate, _ctx) {
+      const inputs = normalizeTaskCreateParams(params);
+      if (inputs.length === 0) return Promise.resolve(textResult("No tasks provided"));
+
       autoClear.resetBatchCountdown();
-      const meta = params.metadata ?? {};
-      if (params.agentType) meta.agentType = params.agentType;
-      const task = store.create(params.subject, params.description, params.activeForm, Object.keys(meta).length > 0 ? meta : undefined);
+      const { tasks, warnings } = store.createMany(inputs);
       widget.update();
-      return Promise.resolve(textResult(`Task #${task.id} created successfully: ${task.subject}`));
+
+      const lines = tasks.length === 1
+        ? [`Task #${tasks[0].id} created successfully: ${tasks[0].subject}`]
+        : [`Created ${tasks.length} tasks:`, ...tasks.map(task => `#${task.id} ${task.subject}`)];
+      if (warnings.length > 0) lines.push(`Warnings: ${warnings.join("; ")}`);
+      return Promise.resolve(textResult(lines.join("\n")));
     },
   });
 
@@ -588,6 +654,9 @@ Returns full task details:
       if (task.blocks.length > 0) {
         lines.push(`Blocks: ${task.blocks.map(id => "#" + id).join(", ")}`);
       }
+      if (task.relations.length > 0) {
+        lines.push(`Relations: ${formatRelations(task.relations)}`);
+      }
 
       // Show metadata if non-empty
       const metaKeys = Object.keys(task.metadata);
@@ -606,7 +675,7 @@ Returns full task details:
   pi.registerTool({
     name: "TaskUpdate",
     label: "TaskUpdate",
-    description: `Use this tool to update a task in the task list.
+    description: `Use this tool to update one or more tasks in the task list.
 
 ## When to Use This Tool
 
@@ -621,110 +690,78 @@ Returns full task details:
 - After resolving, call TaskList to find your next task
 
 - ONLY mark a task as completed when you have FULLY accomplished it
-- If you encounter errors, blockers, or cannot finish, keep the task as in_progress
-- When blocked, create a new task describing what needs to be resolved
-- Never mark a task as completed if:
-  - Tests are failing
-  - Implementation is partial
-  - You encountered unresolved errors
-  - You couldn't find necessary files or dependencies
+- If you encounter errors, blockers, or cannot finish, keep it as in_progress
+- Never mark a task as completed if tests are failing, implementation is partial, or unresolved errors remain
 
 **Delete tasks:**
-- When a task is no longer relevant or was created in error
-- Setting status to \`deleted\` permanently removes the task
+- Include an update with \`status: "deleted"\` to permanently remove that task
+- Deleting a task cleans hard dependency edges and non-blocking relationships pointing to it
 
-**Update task details:**
-- When requirements change or become clearer
-- When establishing dependencies between tasks
+**Update task details and relationships:**
+- Use \`updates\`, an array of update objects. Use one element for a single task.
+- \`addBlocks\` and \`addBlockedBy\` are hard blocking dependencies and affect availability.
+- \`setRelations\`, \`addRelations\`, and \`removeRelations\` manage non-blocking structure such as \`parent\`, \`related\`, \`validates\`, \`supersedes\`, and \`orderAfter\`.
 
 ## Fields You Can Update
 
-- **status**: The task status (see Status Workflow below)
-- **subject**: Change the task title (imperative form, e.g., "Run tests")
-- **description**: Change the task description
-- **activeForm**: Present continuous form shown in spinner when in_progress (e.g., "Running tests")
-- **owner**: Change the task owner (agent name)
-- **metadata**: Merge metadata keys into the task (set a key to null to delete it)
-- **addBlocks**: Mark tasks that cannot start until this one completes
-- **addBlockedBy**: Mark tasks that must complete before this one can start
-
-## Status Workflow
-
-Status progresses: \`pending\` → \`in_progress\` → \`completed\`
-
-Use \`deleted\` to permanently remove a task.
-
-## Staleness
-
-Make sure to read a task's latest state using \`TaskGet\` before updating it.
+- **taskId**: Task to update
+- **status**: \`pending\`, \`in_progress\`, \`completed\`, or \`deleted\`
+- **subject**, **description**, **activeForm**, **owner**
+- **metadata**: Shallow merge; set a key to null to delete it
+- **addBlocks** / **addBlockedBy**: Hard dependencies
+- **setRelations** / **addRelations** / **removeRelations**: Non-blocking relationships
 
 ## Examples
 
-Mark task as in progress when starting work:
+Mark one task as in progress:
 \`\`\`json
-{"taskId": "1", "status": "in_progress"}
+{"updates": [{"taskId": "1", "status": "in_progress"}]}
 \`\`\`
 
-Mark task as completed after finishing work:
+Complete and delete tasks together:
 \`\`\`json
-{"taskId": "1", "status": "completed"}
+{"updates": [{"taskId": "1", "status": "completed"}, {"taskId": "2", "status": "deleted"}]}
 \`\`\`
 
-Delete a task:
+Add a soft ordering relationship:
 \`\`\`json
-{"taskId": "1", "status": "deleted"}
-\`\`\`
-
-Claim a task by setting owner:
-\`\`\`json
-{"taskId": "1", "owner": "my-name"}
-\`\`\`
-
-Set up task dependencies:
-\`\`\`json
-{"taskId": "2", "addBlockedBy": ["1"]}
+{"updates": [{"taskId": "3", "addRelations": [{"type": "orderAfter", "target": "1"}]}]}
 \`\`\``,
     parameters: Type.Object({
-      taskId: Type.String({ description: "The ID of the task to update" }),
-      status: Type.Optional(Type.Unsafe<"pending" | "in_progress" | "completed" | "deleted">({
-        type: "string",
-        enum: ["pending", "in_progress", "completed", "deleted"],
-        description: "New status for the task",
-      })),
-      subject: Type.Optional(Type.String({ description: "New subject for the task" })),
-      description: Type.Optional(Type.String({ description: "New description for the task" })),
-      activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress" })),
-      owner: Type.Optional(Type.String({ description: "New owner for the task" })),
-      metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Metadata keys to merge into the task. Set a key to null to delete it." })),
-      addBlocks: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that this task blocks" })),
-      addBlockedBy: Type.Optional(Type.Array(Type.String(), { description: "Task IDs that block this task" })),
+      updates: Type.Array(TaskUpdateItemSchema, { description: "Task updates to apply. Use one element for a single task.", minItems: 1 }),
     }),
 
-    execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const { taskId, ...fields } = params;
-      const { task, changedFields, warnings } = store.update(taskId, fields);
+    execute(_toolCallId, params: TaskUpdateToolParams, _signal, _onUpdate, _ctx) {
+      const updates = normalizeTaskUpdateParams(params);
+      if (updates.length === 0) return Promise.resolve(textResult("No task updates provided"));
 
-      if (changedFields.length === 0 && !task) {
-        return Promise.resolve(textResult(`Task #${taskId} not found`));
+      const { results, warnings } = store.updateMany(updates);
+      const lines: string[] = [];
+
+      for (let i = 0; i < updates.length; i++) {
+        const update = updates[i];
+        const result = results[i];
+        if (!result || (result.changedFields.length === 0 && !result.task)) {
+          lines.push(`Task #${update.taskId} not found`);
+          continue;
+        }
+
+        if (update.status === "in_progress") {
+          widget.setActiveTask(update.taskId);
+          autoClear.resetBatchCountdown();
+        } else if (update.status === "pending") {
+          autoClear.resetBatchCountdown();
+        } else if (update.status === "completed" || update.status === "deleted") {
+          widget.setActiveTask(update.taskId, false);
+          if (update.status === "completed") autoClear.trackCompletion(update.taskId, currentTurn);
+        }
+
+        lines.push(`Updated task #${update.taskId} ${result.changedFields.join(", ")}`);
       }
 
-      // Update widget active task tracking
-      if (fields.status === "in_progress") {
-        widget.setActiveTask(taskId);
-        autoClear.resetBatchCountdown();
-      } else if (fields.status === "pending") {
-        autoClear.resetBatchCountdown();
-      } else if (fields.status === "completed" || fields.status === "deleted") {
-        widget.setActiveTask(taskId, false);
-        if (fields.status === "completed") autoClear.trackCompletion(taskId, currentTurn);
-      }
-
+      if (warnings.length > 0) lines.push(`Warnings: ${warnings.join("; ")}`);
       widget.update();
-      let msg = `Updated task #${taskId} ${changedFields.join(", ")}`;
-      if (warnings.length > 0) {
-        msg += ` (warning: ${warnings.join("; ")})`;
-      }
-      return Promise.resolve(textResult(msg));
+      return Promise.resolve(textResult(lines.join("\n")));
     },
   });
 

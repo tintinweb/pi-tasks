@@ -262,6 +262,56 @@ describe("TaskStore (in-memory)", () => {
     expect(store.get("3")!.blockedBy).toContain("1");
   });
 
+  it("creates multiple tasks with key-resolved dependencies and relations", () => {
+    const { tasks, warnings } = store.createMany([
+      { key: "design", subject: "Design API", description: "Decide shape" },
+      {
+        key: "implement",
+        subject: "Implement API",
+        description: "Build it",
+        blockedBy: ["design"],
+        relations: [{ type: "validates", target: "design" }],
+      },
+    ]);
+
+    expect(warnings).toEqual([]);
+    expect(tasks.map(t => t.id)).toEqual(["1", "2"]);
+    expect(store.get("1")!.blocks).toEqual(["2"]);
+    expect(store.get("2")!.blockedBy).toEqual(["1"]);
+    expect(store.get("2")!.relations).toEqual([{ type: "validates", target: "1" }]);
+  });
+
+  it("updates multiple tasks and deletes relationship references atomically", () => {
+    store.createMany([
+      { key: "parent", subject: "Parent", description: "Desc", relations: [{ type: "related", target: "child" }] },
+      { key: "child", subject: "Child", description: "Desc" },
+    ]);
+
+    const result = store.updateMany([
+      { taskId: "1", status: "completed" },
+      { taskId: "2", status: "deleted" },
+    ]);
+
+    expect(result.results.map(r => r.changedFields)).toEqual([["status"], ["deleted"]]);
+    expect(store.get("1")!.status).toBe("completed");
+    expect(store.get("1")!.relations).toEqual([]);
+    expect(store.get("2")).toBeUndefined();
+  });
+
+  it("deduplicates relations and warns on dangling relation targets", () => {
+    store.create("Task", "Desc");
+
+    const { warnings } = store.update("1", {
+      addRelations: [
+        { type: "related", target: "999" },
+        { type: "related", target: "999" },
+      ],
+    });
+
+    expect(store.get("1")!.relations).toEqual([{ type: "related", target: "999" }]);
+    expect(warnings).toEqual(["relation target #999 does not exist"]);
+  });
+
   it("addBlockedBy warns on self-dependency", () => {
     store.create("Self", "Desc");
     const { warnings } = store.update("1", { addBlockedBy: ["1"] });
