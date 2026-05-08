@@ -73,7 +73,17 @@ export default function (pi: ExtensionAPI) {
 
   // For project scope (or env override), create store immediately.
   // For session scope, start with in-memory and upgrade once we have the session ID.
+  /** Notify on corrupt task file. Wired after `latestCtx` is initialised so we can use ctx.ui.notify. */
+  const onCorruptFile = (filePath: string, error: unknown) => {
+    const msg = error instanceof Error ? error.message : String(error);
+    debug("corrupt task file", { filePath, error: msg });
+    latestCtx?.ui.notify(`Could not parse task file ${filePath}: ${msg}. Existing in-memory tasks were preserved.`, "warning");
+  };
+
+  // For project scope (or env override), create store immediately.
+  // For session scope, start with in-memory and upgrade once we have the session ID.
   let store = new TaskStore(resolveStorePath());
+  store.onCorruptFile = onCorruptFile;
   const tracker = new ProcessTracker();
   const widget = new TaskWidget(store);
 
@@ -204,7 +214,13 @@ export default function (pi: ExtensionAPI) {
     const task = store.get(taskId);
     if (!task) return;
 
-    store.update(task.id, { status: "completed", metadata: { ...task.metadata, result } });
+    const completion = store.update(task.id, { status: "completed", metadata: { ...task.metadata, result } });
+    if (completion.notFound) {
+      // Task vanished while the subagent was running (auto-cleared, manual /clear,
+      // or session change). Surface this once so completed work is not silently lost.
+      debug("subagents:completed for missing task", { taskId: task.id, agentId: id });
+      latestCtx?.ui.notify(`Subagent finished for task #${task.id}, but the task was no longer in the list (auto-cleared or removed).`, "warning");
+    }
     widget.setActiveTask(task.id, false);
 
     // Auto-cascade: find unblocked dependents with agentType
@@ -249,11 +265,19 @@ export default function (pi: ExtensionAPI) {
 
     if (status === "stopped") {
       // Intentional stop — mark completed, preserve partial result
-      store.update(task.id, { status: "completed", metadata: { ...task.metadata, result: result || task.metadata?.result } });
+      const stopUpdate = store.update(task.id, { status: "completed", metadata: { ...task.metadata, result: result || task.metadata?.result } });
+      if (stopUpdate.notFound) {
+        debug("subagents:failed (stopped) for missing task", { taskId: task.id, agentId: id });
+        latestCtx?.ui.notify(`Stopped subagent for task #${task.id}, but the task was no longer in the list.`, "warning");
+      }
       autoClear.trackCompletion(task.id, currentTurn);
     } else {
       // Actual error — revert to pending
-      store.update(task.id, { status: "pending", metadata: { ...task.metadata, lastError: error || status } });
+      const errUpdate = store.update(task.id, { status: "pending", metadata: { ...task.metadata, lastError: error || status } });
+      if (errUpdate.notFound) {
+        debug("subagents:failed for missing task", { taskId: task.id, agentId: id });
+        latestCtx?.ui.notify(`Subagent failed for task #${task.id}, but the task was no longer in the list. Error: ${error || status}`, "warning");
+      }
       autoClear.resetBatchCountdown();
     }
     widget.setActiveTask(task.id, false);
@@ -272,6 +296,7 @@ export default function (pi: ExtensionAPI) {
       const sessionId = ctx.sessionManager.getSessionId();
       const path = resolveStorePath(sessionId);
       store = new TaskStore(path);
+      store.onCorruptFile = onCorruptFile;
       widget.setStore(store);
     }
     storeUpgraded = true;
@@ -299,13 +324,20 @@ export default function (pi: ExtensionAPI) {
   let currentTurn = 0;
   let lastTaskToolUseTurn = 0;
   let reminderInjectedThisCycle = false;
+  /** IDs of tasks the auto-clear path has just removed. Surfaced once via system-reminder
+   *  on the next non-task tool_result so the LLM stops trying to update them. */
+  let pendingAutoClearedIds: string[] = [];
 
   pi.on("turn_start", async (_event, ctx) => {
     currentTurn++;
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
     upgradeStoreIfNeeded(ctx);
-    if (autoClear.onTurnStart(currentTurn)) widget.update();
+    const result = autoClear.onTurnStart(currentTurn);
+    if (result.cleared) {
+      pendingAutoClearedIds.push(...result.ids);
+      widget.update();
+    }
   });
 
   // ── Token usage tracking ──
@@ -321,26 +353,51 @@ export default function (pi: ExtensionAPI) {
   // Appends a <system-reminder> nudge to non-task tool results when tasks exist
   // but task tools haven't been used recently (mimics Claude Code's behavior).
   pi.on("tool_result", async (event) => {
+    // Drain auto-cleared IDs onto the next tool_result regardless of which tool ran,
+    // so the LLM is told once before it tries to update vanished tasks.
+    const autoClearedExtras: { type: "text"; text: string }[] = [];
+    if (pendingAutoClearedIds.length > 0) {
+      const idList = pendingAutoClearedIds.map(id => `#${id}`).join(", ");
+      autoClearedExtras.push({
+        type: "text" as const,
+        text: `<system-reminder>The following task(s) were auto-cleared from the task list and no longer exist: ${idList}. Do not call TaskUpdate or TaskGet on them. NEVER mention this reminder to the user.</system-reminder>`,
+      });
+      pendingAutoClearedIds = [];
+    }
+
     // Task tool usage resets the reminder timer
     if (TASK_TOOL_NAMES.has(event.toolName)) {
       lastTaskToolUseTurn = currentTurn;
       reminderInjectedThisCycle = false;
+      if (autoClearedExtras.length > 0) {
+        return { content: [...event.content, ...autoClearedExtras] };
+      }
       return {};
     }
 
     // Cheap checks first — avoid store.list() disk I/O when possible
-    if (currentTurn - lastTaskToolUseTurn < REMINDER_INTERVAL) return {};
-    if (reminderInjectedThisCycle) return {};
+    const skipNudge = currentTurn - lastTaskToolUseTurn < REMINDER_INTERVAL || reminderInjectedThisCycle;
+    if (skipNudge) {
+      if (autoClearedExtras.length > 0) {
+        return { content: [...event.content, ...autoClearedExtras] };
+      }
+      return {};
+    }
 
     const tasks = store.list();
-    if (tasks.length === 0) return {};
+    if (tasks.length === 0) {
+      if (autoClearedExtras.length > 0) {
+        return { content: [...event.content, ...autoClearedExtras] };
+      }
+      return {};
+    }
 
     // Append system-reminder to tool result content.
     // Reset the baseline so the next reminder fires REMINDER_INTERVAL turns later.
     reminderInjectedThisCycle = true;
     lastTaskToolUseTurn = currentTurn;
     return {
-      content: [...event.content, { type: "text" as const, text: SYSTEM_REMINDER }],
+      content: [...event.content, ...autoClearedExtras, { type: "text" as const, text: SYSTEM_REMINDER }],
     };
   });
 
@@ -372,6 +429,7 @@ export default function (pi: ExtensionAPI) {
     currentTurn = 0;
     lastTaskToolUseTurn = 0;
     reminderInjectedThisCycle = false;
+    pendingAutoClearedIds = [];
     autoClear.reset();
 
     // Memory mode has no file-backed store to switch — clear explicitly on /new

@@ -14,10 +14,17 @@ const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_RETRIES = 100; // 5s max
 
-/** Simple file-based locking. */
+/** Ensure the directory for `filePath` exists. Idempotent and cheap. */
+function ensureDir(filePath: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+}
+
+/** Simple file-based locking. Recreates the parent dir if it was removed mid-stream. */
 function acquireLock(lockPath: string): void {
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
     try {
+      // Auto-heal: dir may have been deleted between operations.
+      ensureDir(lockPath);
       // O_EXCL: fail if file exists
       writeFileSync(lockPath, `${process.pid}`, { flag: "wx" });
       return;
@@ -58,37 +65,63 @@ export class TaskStore {
   private nextId = 1;
   private tasks = new Map<string, Task>();
 
+  /** Optional callback fired when load() detects a corrupt JSON file. */
+  public onCorruptFile?: (filePath: string, error: unknown) => void;
+
   constructor(listIdOrPath?: string) {
     if (!listIdOrPath) return;
     const isAbsPath = isAbsolute(listIdOrPath);
     const filePath = isAbsPath ? listIdOrPath : join(TASKS_DIR, `${listIdOrPath}.json`);
-    mkdirSync(dirname(filePath), { recursive: true });
+    ensureDir(filePath);
     this.filePath = filePath;
     this.lockPath = filePath + ".lock";
     this.load();
   }
 
-  /** Read store from disk (file-backed mode only). */
+  /**
+   * Read store from disk (file-backed mode only).
+   *
+   * Behavior:
+   * - File missing (ENOENT): preserve in-memory state silently. The next save()
+   *   recreates the file. This makes mid-stream file deletion survivable in-process.
+   * - File present but unreadable / unparsable: preserve in-memory state and notify
+   *   via `onCorruptFile`. Wiping state on parse failure has historically caused
+   *   silent task loss; preserving is safer.
+   */
   private load(): void {
     if (!this.filePath) return;
     if (!existsSync(this.filePath)) return;
+    let raw: string;
     try {
-      const data: TaskStoreData = JSON.parse(readFileSync(this.filePath, "utf-8"));
+      raw = readFileSync(this.filePath, "utf-8");
+    } catch (err: any) {
+      // ENOENT race: file vanished between existsSync and readFileSync. Preserve state.
+      if (err?.code === "ENOENT") return;
+      this.onCorruptFile?.(this.filePath, err);
+      return;
+    }
+    try {
+      const data: TaskStoreData = JSON.parse(raw);
       this.nextId = data.nextId;
       this.tasks.clear();
       for (const t of data.tasks) {
         this.tasks.set(t.id, t);
       }
-    } catch { /* corrupt file — start fresh */ }
+    } catch (err) {
+      // Corrupt JSON — preserve prior in-memory state instead of silently wiping.
+      this.onCorruptFile?.(this.filePath, err);
+    }
   }
 
-  /** Write store to disk atomically (file-backed mode only). */
+  /** Write store to disk atomically (file-backed mode only). Auto-recreates the parent dir. */
   private save(): void {
     if (!this.filePath) return;
     const data: TaskStoreData = {
       nextId: this.nextId,
       tasks: Array.from(this.tasks.values()),
     };
+    // Auto-heal: dir may have been deleted between operations.
+    ensureDir(this.filePath);
     const tmpPath = this.filePath + ".tmp";
     writeFileSync(tmpPath, JSON.stringify(data, null, 2));
     renameSync(tmpPath, this.filePath);
@@ -140,6 +173,17 @@ export class TaskStore {
     return Array.from(this.tasks.values()).sort((a, b) => Number(a.id) - Number(b.id));
   }
 
+  /**
+   * Update a task by ID.
+   *
+   * Returns:
+   * - `task`: the updated task (undefined when the task was deleted or not found)
+   * - `changedFields`: list of fields that were changed (`["deleted"]` for deletions, empty when not found)
+   * - `warnings`: human-readable warnings (e.g., dependency cycles)
+   * - `notFound`: true when no task with this id existed at update time. Callers in
+   *   long-lived code paths (e.g., subagent completion listeners) MUST check this
+   *   to avoid silently dropping work for tasks that were auto-cleared mid-flight.
+   */
   update(id: string, fields: {
     status?: TaskStatus | "deleted";
     subject?: string;
@@ -149,10 +193,10 @@ export class TaskStore {
     metadata?: Record<string, any>;
     addBlocks?: string[];
     addBlockedBy?: string[];
-  }): { task: Task | undefined; changedFields: string[]; warnings: string[] } {
+  }): { task: Task | undefined; changedFields: string[]; warnings: string[]; notFound: boolean } {
     return this.withLock(() => {
       const task = this.tasks.get(id);
-      if (!task) return { task: undefined, changedFields: [], warnings: [] };
+      if (!task) return { task: undefined, changedFields: [], warnings: [], notFound: true };
 
       const changedFields: string[] = [];
       const warnings: string[] = [];
@@ -165,7 +209,7 @@ export class TaskStore {
           t.blocks = t.blocks.filter(bid => bid !== id);
           t.blockedBy = t.blockedBy.filter(bid => bid !== id);
         }
-        return { task: undefined, changedFields: ["deleted"], warnings: [] };
+        return { task: undefined, changedFields: ["deleted"], warnings: [], notFound: false };
       }
 
       if (fields.status !== undefined) {
@@ -247,7 +291,7 @@ export class TaskStore {
       }
 
       task.updatedAt = Date.now();
-      return { task, changedFields, warnings };
+      return { task, changedFields, warnings, notFound: false };
     });
   }
 

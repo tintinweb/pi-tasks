@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -412,5 +412,114 @@ describe("TaskStore (absolute path)", () => {
 
     const raw = JSON.parse(readFileSync(absFilePath, "utf-8"));
     expect(raw.tasks).toHaveLength(2);
+  });
+});
+
+describe("TaskStore — failure-mode hardening", () => {
+  const tasksDir = join(homedir(), ".pi", "tasks");
+
+  function fresh(prefix: string) {
+    return join(tasksDir, `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  }
+
+  describe("file deleted mid-stream", () => {
+    const filePath = fresh("deleted-mid-stream");
+    afterEach(() => {
+      try { rmSync(filePath); } catch { /* */ }
+      try { rmSync(filePath + ".lock"); } catch { /* */ }
+      try { rmSync(filePath + ".tmp"); } catch { /* */ }
+    });
+
+    it("preserves in-memory state and recreates the file on next save", () => {
+      const store = new TaskStore(filePath);
+      store.create("Survives deletion", "Desc");
+      // External actor removes the file (simulated).
+      rmSync(filePath);
+
+      // Subsequent update should still find the task in memory and recreate the file.
+      const result = store.update("1", { status: "completed" });
+      expect(result.notFound).toBe(false);
+      expect(result.task?.status).toBe("completed");
+
+      const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+      expect(raw.tasks).toHaveLength(1);
+      expect(raw.tasks[0].status).toBe("completed");
+    });
+
+    it("auto-recreates the parent directory if removed mid-stream", () => {
+      const store = new TaskStore(filePath);
+      store.create("Task", "Desc");
+      // Blow away the entire directory.
+      rmSync(tasksDir, { recursive: true, force: true });
+
+      // Next operation must auto-heal the dir, acquire the lock, and persist.
+      const result = store.update("1", { status: "in_progress" });
+      expect(result.notFound).toBe(false);
+      expect(result.task?.status).toBe("in_progress");
+
+      const raw = JSON.parse(readFileSync(filePath, "utf-8"));
+      expect(raw.tasks[0].status).toBe("in_progress");
+    });
+  });
+
+  describe("update() on missing task", () => {
+    const filePath = fresh("update-missing");
+    afterEach(() => {
+      try { rmSync(filePath); } catch { /* */ }
+      try { rmSync(filePath + ".lock"); } catch { /* */ }
+      try { rmSync(filePath + ".tmp"); } catch { /* */ }
+    });
+
+    it("returns notFound: true for unknown ids", () => {
+      const store = new TaskStore(filePath);
+      store.create("Task", "Desc");
+      const result = store.update("999", { status: "completed" });
+      expect(result.task).toBeUndefined();
+      expect(result.changedFields).toEqual([]);
+      expect(result.notFound).toBe(true);
+    });
+
+    it("returns notFound: false on successful update", () => {
+      const store = new TaskStore(filePath);
+      store.create("Task", "Desc");
+      const result = store.update("1", { status: "in_progress" });
+      expect(result.notFound).toBe(false);
+      expect(result.task?.status).toBe("in_progress");
+    });
+
+    it("returns notFound: false on deletion of an existing task", () => {
+      const store = new TaskStore(filePath);
+      store.create("Task", "Desc");
+      const result = store.update("1", { status: "deleted" });
+      expect(result.task).toBeUndefined();
+      expect(result.changedFields).toEqual(["deleted"]);
+      expect(result.notFound).toBe(false);
+    });
+  });
+
+  describe("corrupt file on disk", () => {
+    const filePath = fresh("corrupt");
+    afterEach(() => {
+      try { rmSync(filePath); } catch { /* */ }
+      try { rmSync(filePath + ".lock"); } catch { /* */ }
+      try { rmSync(filePath + ".tmp"); } catch { /* */ }
+    });
+
+    it("preserves prior in-memory state and notifies via onCorruptFile", () => {
+      const store = new TaskStore(filePath);
+      store.create("Survive corruption", "Desc");
+
+      // Corrupt the file on disk.
+      writeFileSync(filePath, "{ this is not json");
+
+      const corruptCalls: { filePath: string; error: unknown }[] = [];
+      store.onCorruptFile = (fp, err) => corruptCalls.push({ filePath: fp, error: err });
+
+      // get() triggers a load(); the corrupt file should not wipe in-memory state.
+      const t = store.get("1");
+      expect(t?.subject).toBe("Survive corruption");
+      expect(corruptCalls).toHaveLength(1);
+      expect(corruptCalls[0].filePath).toBe(filePath);
+    });
   });
 });
