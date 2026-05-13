@@ -142,7 +142,8 @@ export class TaskWidget {
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
     const showAll = this.config.showAll ?? false;
-    const visible = showAll ? tasks : tasks.slice(0, DEFAULT_MAX_VISIBLE_TASKS);
+    const limit = this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS;
+    const visible = showAll ? tasks : tasks.slice(0, limit);
     for (let i = 0; i < visible.length; i++) {
       const task = visible[i];
       const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";

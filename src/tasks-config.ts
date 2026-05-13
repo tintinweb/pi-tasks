@@ -8,6 +8,7 @@ export interface TasksConfig {
   autoCascade?: boolean;   // default: false
   autoClearCompleted?: "never" | "on_list_complete" | "on_task_complete";  // default: "on_list_complete"
   showAll?: boolean;                     // default: false
+  maxVisible?: number;                   // default: 10
 }
 
 const CONFIG_PATH = join(process.cwd(), ".pi", "tasks-config.json");

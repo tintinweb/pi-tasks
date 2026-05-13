@@ -171,8 +171,36 @@ describe("TaskWidget", () => {
     expect(lines[11]).toContain("5 more");
   });
 
-  it("shows all tasks when showAll is true", () => {
-    widget = new TaskWidget(store, { showAll: true });
+  it("respects maxVisible config", () => {
+    widget = new TaskWidget(store, { maxVisible: 5 });
+    widget.setUICtx(ui.ctx);
+    for (let i = 0; i < 15; i++) {
+      store.create(`Task ${i + 1}`, "Desc");
+    }
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // header + 5 tasks + "… and 10 more"
+    expect(lines).toHaveLength(7);
+    expect(lines[6]).toContain("10 more");
+  });
+
+  it("shows all tasks when limit exceeds task count", () => {
+    widget = new TaskWidget(store, { maxVisible: 10 });
+    widget.setUICtx(ui.ctx);
+    for (let i = 0; i < 3; i++) {
+      store.create(`Task ${i + 1}`, "Desc");
+    }
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // header + 3 tasks, no overflow
+    expect(lines).toHaveLength(4);
+    expect(lines[lines.length - 1]).not.toContain("more");
+  });
+
+  it("shows all tasks when showAll is true even with maxVisible set", () => {
+    widget = new TaskWidget(store, { showAll: true, maxVisible: 5 });
     widget.setUICtx(ui.ctx);
     for (let i = 0; i < 15; i++) {
       store.create(`Task ${i + 1}`, "Desc");
