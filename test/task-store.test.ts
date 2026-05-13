@@ -50,6 +50,17 @@ describe("TaskStore (in-memory)", () => {
     expect(tasks.map(t => t.id)).toEqual(["1", "2", "3"]);
   });
 
+  it("lists tasks sorted by status when sortOrder is 'status'", () => {
+    store.create("Pending", "Desc");           // #1
+    store.create("Completed", "Desc");         // #2
+    store.create("In progress", "Desc");       // #3
+    store.update("2", { status: "completed" });
+    store.update("3", { status: "in_progress" });
+
+    const tasks = store.list("status");
+    expect(tasks.map(t => t.subject)).toEqual(["Completed", "In progress", "Pending"]);
+  });
+
   it("updates task status", () => {
     store.create("Test", "Desc");
     const { task, changedFields } = store.update("1", { status: "in_progress" });

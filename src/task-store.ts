@@ -10,6 +10,17 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import type { Task, TaskStatus, TaskStoreData } from "./types.js";
 
+function sortById(a: Task, b: Task): number {
+  return Number(a.id) - Number(b.id);
+}
+
+function sortByStatus(a: Task, b: Task): number {
+  const rank = (s: string) => s === "completed" ? 0 : s === "in_progress" ? 1 : 2;
+  return rank(a.status) - rank(b.status) || Number(a.id) - Number(b.id);
+}
+
+const SORT_FNS = { id: sortById, status: sortByStatus };
+
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_RETRIES = 100; // 5s max
@@ -134,10 +145,10 @@ export class TaskStore {
     return this.tasks.get(id);
   }
 
-  /** List all tasks sorted by ID ascending. */
-  list(): Task[] {
+  /** List all tasks, sorted by the given order (defaults to ID ascending). */
+  list(sortOrder: "id" | "status" = "id"): Task[] {
     if (this.filePath) this.load();
-    return Array.from(this.tasks.values()).sort((a, b) => Number(a.id) - Number(b.id));
+    return Array.from(this.tasks.values()).sort(SORT_FNS[sortOrder]);
   }
 
   update(id: string, fields: {
