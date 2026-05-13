@@ -77,6 +77,15 @@ export async function openSettingsMenu(
         values: ["id", "status", "recent", "oldest"],
       },
       {
+        id: "hiddenAt",
+        label: "Hidden tasks position",
+        description:
+          '"bottom" hides tasks from the end of the list. ' +
+          '"top" hides tasks from the start (useful with status sort to collapse completed tasks).',
+        currentValue: cfg.hiddenAt ?? "bottom",
+        values: ["bottom", "top"],
+      },
+      {
         id: "autoClearCompleted",
         label: "Auto-clear completed tasks",
         description:
@@ -116,6 +125,10 @@ export async function openSettingsMenu(
         }
         if (id === "sortOrder") {
           cfg.sortOrder = newValue as TasksConfig["sortOrder"];
+          saveTasksConfig(cfg);
+        }
+        if (id === "hiddenAt") {
+          cfg.hiddenAt = newValue as "top" | "bottom";
           saveTasksConfig(cfg);
         }
       },

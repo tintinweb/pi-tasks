@@ -213,6 +213,47 @@ describe("TaskWidget", () => {
     expect(lines[lines.length - 1]).not.toContain("more");
   });
 
+  it("truncates from top when hiddenAt is 'top'", () => {
+    widget = new TaskWidget(store, { sortOrder: "status", hiddenAt: "top", showAll: false, maxVisible: 5 });
+    widget.setUICtx(ui.ctx);
+    // 4 completed, 2 in_progress, 2 pending = 8 total, limit 5
+    for (let i = 1; i <= 4; i++) store.create(`Done ${i}`, "Desc");
+    for (let i = 1; i <= 2; i++) store.create(`Working ${i}`, "Desc");
+    for (let i = 1; i <= 2; i++) store.create(`Todo ${i}`, "Desc");
+    for (let i = 1; i <= 4; i++) store.update(String(i), { status: "completed" });
+    for (let i = 5; i <= 6; i++) store.update(String(i), { status: "in_progress" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // header + overflow line + 5 visible = 7 lines
+    expect(lines).toHaveLength(7);
+    // overflow at top (after header)
+    expect(lines[1]).toContain("3 more");
+    // all in_progress and pending visible
+    expect(lines.some(l => l.includes("Working 1"))).toBe(true);
+    expect(lines.some(l => l.includes("Todo 2"))).toBe(true);
+    // only newest completed (#4) visible
+    expect(lines.some(l => l.includes("Done 4"))).toBe(true);
+    // oldest completed hidden
+    expect(lines.some(l => l.includes("Done 1"))).toBe(false);
+    expect(lines.some(l => l.includes("Done 3"))).toBe(false);
+  });
+
+  it("truncates from bottom by default", () => {
+    widget = new TaskWidget(store, { maxVisible: 3 });
+    widget.setUICtx(ui.ctx);
+    for (let i = 1; i <= 5; i++) store.create(`Task ${i}`, "Desc");
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // header + 3 tasks + overflow at bottom = 5 lines
+    expect(lines).toHaveLength(5);
+    expect(lines[1]).toContain("Task 1");
+    expect(lines[3]).toContain("Task 3");
+    expect(lines[4]).toContain("2 more");
+    expect(lines.some(l => l.includes("Task 4"))).toBe(false);
+  });
+
   it("sorts tasks by status when sortOrder is 'status'", () => {
     widget = new TaskWidget(store, { sortOrder: "status" });
     widget.setUICtx(ui.ctx);

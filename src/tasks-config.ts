@@ -10,6 +10,7 @@ export interface TasksConfig {
   showAll?: boolean;                     // default: false
   maxVisible?: number;                   // default: 10
   sortOrder?: "id" | "status" | "recent" | "oldest";  // default: "id"
+  hiddenAt?: "top" | "bottom";                         // default: "bottom"
 }
 
 const CONFIG_PATH = join(process.cwd(), ".pi", "tasks-config.json");

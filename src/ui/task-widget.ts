@@ -12,6 +12,20 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
 
+// ---- Truncation ----
+
+import type { Task } from "../types.js";
+
+function truncateFromTop(tasks: Task[], limit: number): Task[] {
+  return tasks.slice(-limit);
+}
+
+function truncateFromBottom(tasks: Task[], limit: number): Task[] {
+  return tasks.slice(0, limit);
+}
+
+const TRUNCATE_FNS = { top: truncateFromTop, bottom: truncateFromBottom };
+
 // ---- Types ----
 
 export type Theme = {
@@ -144,7 +158,17 @@ export class TaskWidget {
 
     const showAll = this.config.showAll ?? false;
     const limit = this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS;
-    const visible = showAll ? tasks : tasks.slice(0, limit);
+    const hiddenAt = this.config.hiddenAt ?? "bottom";
+    const visible = showAll ? tasks : TRUNCATE_FNS[hiddenAt](tasks, limit);
+
+    const hiddenCount = tasks.length - visible.length;
+    const overflowLine = hiddenCount > 0
+      ? truncate(theme.fg("dim", `    … and ${hiddenCount} more`))
+      : undefined;
+
+    if (overflowLine && hiddenAt === "top") {
+      lines.push(overflowLine);
+    }
     for (let i = 0; i < visible.length; i++) {
       const task = visible[i];
       const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
@@ -200,9 +224,8 @@ export class TaskWidget {
       lines.push(truncate(text + suffix));
     }
 
-    const hiddenCount = tasks.length - visible.length;
-    if (hiddenCount > 0) {
-      lines.push(truncate(theme.fg("dim", `    … and ${hiddenCount} more`)));
+    if (overflowLine && hiddenAt !== "top") {
+      lines.push(overflowLine);
     }
 
     return lines;
