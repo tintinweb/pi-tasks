@@ -32,7 +32,7 @@ export type UICtx = {
 /** Star spinner frames for animated active task indicator (matches Claude Code). */
 const SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
 
-const MAX_VISIBLE_TASKS = 10;
+const DEFAULT_MAX_VISIBLE_TASKS = 10;
 
 /** Per-task runtime metrics (elapsed time, token usage). */
 export interface TaskMetrics {
@@ -142,7 +142,7 @@ export class TaskWidget {
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
     const showAll = this.config.showAll ?? false;
-    const visible = showAll ? tasks : tasks.slice(0, MAX_VISIBLE_TASKS);
+    const visible = showAll ? tasks : tasks.slice(0, DEFAULT_MAX_VISIBLE_TASKS);
     for (let i = 0; i < visible.length; i++) {
       const task = visible[i];
       const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
