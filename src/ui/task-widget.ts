@@ -141,9 +141,18 @@ export class TaskWidget {
     const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
+    const sortOrder = this.config.sortOrder ?? "id";
+    let sorted = tasks; // already ID-ascending from store.list()
+    if (sortOrder === "status") {
+      const statusRank = (s: string) => s === "completed" ? 0 : s === "in_progress" ? 1 : 2;
+      sorted = [...tasks].sort((a, b) =>
+        statusRank(a.status) - statusRank(b.status) || Number(a.id) - Number(b.id)
+      );
+    }
+
     const showAll = this.config.showAll ?? false;
     const limit = this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS;
-    const visible = showAll ? tasks : tasks.slice(0, limit);
+    const visible = showAll ? sorted : sorted.slice(0, limit);
     for (let i = 0; i < visible.length; i++) {
       const task = visible[i];
       const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";

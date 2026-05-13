@@ -213,6 +213,54 @@ describe("TaskWidget", () => {
     expect(lines[lines.length - 1]).not.toContain("more");
   });
 
+  it("sorts tasks by status when sortOrder is 'status'", () => {
+    widget = new TaskWidget(store, { sortOrder: "status" });
+    widget.setUICtx(ui.ctx);
+    store.create("Pending task", "Desc");           // #1
+    store.create("Completed task", "Desc");         // #2
+    store.create("In progress task", "Desc");       // #3
+    store.update("2", { status: "completed" });
+    store.update("3", { status: "in_progress" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // header + 3 tasks: completed, in_progress, pending
+    expect(lines[1]).toContain("Completed task");
+    expect(lines[2]).toContain("In progress task");
+    expect(lines[3]).toContain("Pending task");
+  });
+
+  it("defaults to ID order when sortOrder is unset", () => {
+    store.create("Pending task", "Desc");           // #1
+    store.create("Completed task", "Desc");         // #2
+    store.create("In progress task", "Desc");       // #3
+    store.update("2", { status: "completed" });
+    store.update("3", { status: "in_progress" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("Pending task");
+    expect(lines[2]).toContain("Completed task");
+    expect(lines[3]).toContain("In progress task");
+  });
+
+  it("keeps ID order when sortOrder is 'id'", () => {
+    widget = new TaskWidget(store, { sortOrder: "id" });
+    widget.setUICtx(ui.ctx);
+    store.create("Pending task", "Desc");           // #1
+    store.create("Completed task", "Desc");         // #2
+    store.create("In progress task", "Desc");       // #3
+    store.update("2", { status: "completed" });
+    store.update("3", { status: "in_progress" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // ID order: #1 pending, #2 completed, #3 in_progress
+    expect(lines[1]).toContain("Pending task");
+    expect(lines[2]).toContain("Completed task");
+    expect(lines[3]).toContain("In progress task");
+  });
+
   it("tracks token usage for active tasks", () => {
     store.create("Active task", "Desc", "Running");
     store.update("1", { status: "in_progress" });

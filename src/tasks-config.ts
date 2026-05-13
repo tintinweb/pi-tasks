@@ -9,6 +9,7 @@ export interface TasksConfig {
   autoClearCompleted?: "never" | "on_list_complete" | "on_task_complete";  // default: "on_list_complete"
   showAll?: boolean;                     // default: false
   maxVisible?: number;                   // default: 10
+  sortOrder?: "id" | "status";            // default: "id"
 }
 
 const CONFIG_PATH = join(process.cwd(), ".pi", "tasks-config.json");
