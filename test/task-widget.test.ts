@@ -171,6 +171,19 @@ describe("TaskWidget", () => {
     expect(lines[11]).toContain("5 more");
   });
 
+  it("shows all tasks when showAll is true", () => {
+    widget.setConfig({ showAll: true });
+    for (let i = 0; i < 15; i++) {
+      store.create(`Task ${i + 1}`, "Desc");
+    }
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    // header + 15 tasks, no overflow line
+    expect(lines).toHaveLength(16);
+    expect(lines[lines.length - 1]).not.toContain("more");
+  });
+
   it("tracks token usage for active tasks", () => {
     store.create("Active task", "Desc", "Running");
     store.update("1", { status: "in_progress" });

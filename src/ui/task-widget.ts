@@ -10,6 +10,7 @@
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { TaskStore } from "../task-store.js";
+import type { TasksConfig } from "../tasks-config.js";
 
 // ---- Types ----
 
@@ -73,7 +74,13 @@ export class TaskWidget {
   /** Whether the widget callback is currently registered. */
   private widgetRegistered = false;
 
+  private config: TasksConfig = {};
+
   constructor(private store: TaskStore) {}
+
+  setConfig(cfg: TasksConfig) {
+    this.config = cfg;
+  }
 
   setStore(store: TaskStore) {
     this.store = store;
@@ -137,7 +144,8 @@ export class TaskWidget {
     const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
-    const visible = tasks.slice(0, MAX_VISIBLE_TASKS);
+    const showAll = this.config.showAll ?? false;
+    const visible = showAll ? tasks : tasks.slice(0, MAX_VISIBLE_TASKS);
     for (let i = 0; i < visible.length; i++) {
       const task = visible[i];
       const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
@@ -193,8 +201,9 @@ export class TaskWidget {
       lines.push(truncate(text + suffix));
     }
 
-    if (tasks.length > MAX_VISIBLE_TASKS) {
-      lines.push(truncate(theme.fg("dim", `    … and ${tasks.length - MAX_VISIBLE_TASKS} more`)));
+    const hiddenCount = tasks.length - visible.length;
+    if (hiddenCount > 0) {
+      lines.push(truncate(theme.fg("dim", `    … and ${hiddenCount} more`)));
     }
 
     return lines;
