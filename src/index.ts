@@ -75,7 +75,7 @@ export default function (pi: ExtensionAPI) {
   // For session scope, start with in-memory and upgrade once we have the session ID.
   let store = new TaskStore(resolveStorePath());
   const tracker = new ProcessTracker();
-  const widget = new TaskWidget(store);
+  const widget = new TaskWidget(store, cfg);
 
   // ── Subagent integration state ──
   /** Latest ExtensionContext — refreshed on every tool execution so cascade always has a valid one. */

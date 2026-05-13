@@ -172,7 +172,8 @@ describe("TaskWidget", () => {
   });
 
   it("shows all tasks when showAll is true", () => {
-    widget.setConfig({ showAll: true });
+    widget = new TaskWidget(store, { showAll: true });
+    widget.setUICtx(ui.ctx);
     for (let i = 0; i < 15; i++) {
       store.create(`Task ${i + 1}`, "Desc");
     }

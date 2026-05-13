@@ -74,13 +74,10 @@ export class TaskWidget {
   /** Whether the widget callback is currently registered. */
   private widgetRegistered = false;
 
-  private config: TasksConfig = {};
-
-  constructor(private store: TaskStore) {}
-
-  setConfig(cfg: TasksConfig) {
-    this.config = cfg;
-  }
+  constructor(
+    private store: TaskStore,
+    private config: TasksConfig = {},
+  ) {}
 
   setStore(store: TaskStore) {
     this.store = store;
