@@ -50,6 +50,15 @@ export async function openSettingsMenu(
         values: ["on", "off"],
       },
       {
+        id: "showAll",
+        label: "Show all tasks in widget",
+        description:
+          "When ON, every task is shown regardless of the visible limit. " +
+          "When OFF, the list is capped by 'Max visible tasks'.",
+        currentValue: (cfg.showAll ?? false) ? "on" : "off",
+        values: ["on", "off"],
+      },
+      {
         id: "autoClearCompleted",
         label: "Auto-clear completed tasks",
         description:
@@ -77,6 +86,10 @@ export async function openSettingsMenu(
         }
         if (id === "autoClearCompleted") {
           cfg.autoClearCompleted = newValue as TasksConfig["autoClearCompleted"];
+          saveTasksConfig(cfg);
+        }
+        if (id === "showAll") {
+          cfg.showAll = newValue === "on";
           saveTasksConfig(cfg);
         }
       },
