@@ -1,7 +1,7 @@
 import { readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskStore } from "../src/task-store.js";
 
 describe("TaskStore (in-memory)", () => {
@@ -59,6 +59,42 @@ describe("TaskStore (in-memory)", () => {
 
     const tasks = store.list("status");
     expect(tasks.map(t => t.subject)).toEqual(["Completed", "In progress", "Pending"]);
+  });
+
+  it("lists tasks sorted by most recently updated when sortOrder is 'recent'", () => {
+    vi.useFakeTimers({ now: 1000 });
+    store.create("First", "Desc");    // #1 created at 1000
+    vi.advanceTimersByTime(100);
+    store.create("Second", "Desc");   // #2 created at 1100
+    vi.advanceTimersByTime(100);
+    store.create("Third", "Desc");    // #3 created at 1200
+    vi.advanceTimersByTime(100);
+    store.update("1", { subject: "First updated" });  // #1 updated at 1300
+    vi.advanceTimersByTime(100);
+    store.update("3", { subject: "Third updated" });  // #3 updated at 1400
+
+    const tasks = store.list("recent");
+    // Most recently updated first: #3 (1400), #1 (1300), #2 (1100)
+    expect(tasks.map(t => t.id)).toEqual(["3", "1", "2"]);
+    vi.useRealTimers();
+  });
+
+  it("lists tasks sorted by least recently updated when sortOrder is 'oldest'", () => {
+    vi.useFakeTimers({ now: 1000 });
+    store.create("First", "Desc");    // #1 created at 1000
+    vi.advanceTimersByTime(100);
+    store.create("Second", "Desc");   // #2 created at 1100
+    vi.advanceTimersByTime(100);
+    store.create("Third", "Desc");    // #3 created at 1200
+    vi.advanceTimersByTime(100);
+    store.update("1", { subject: "First updated" });  // #1 updated at 1300
+    vi.advanceTimersByTime(100);
+    store.update("3", { subject: "Third updated" });  // #3 updated at 1400
+
+    const tasks = store.list("oldest");
+    // Least recently updated first: #2 (1100), #1 (1300), #3 (1400)
+    expect(tasks.map(t => t.id)).toEqual(["2", "1", "3"]);
+    vi.useRealTimers();
   });
 
   it("updates task status", () => {

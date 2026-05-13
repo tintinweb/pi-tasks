@@ -74,7 +74,7 @@ export async function openSettingsMenu(
           '"status" groups by completed → in-progress → pending. ' +
           '"id" sorts by creation order.',
         currentValue: cfg.sortOrder ?? "id",
-        values: ["id", "status"],
+        values: ["id", "status", "recent", "oldest"],
       },
       {
         id: "autoClearCompleted",
@@ -115,7 +115,7 @@ export async function openSettingsMenu(
           saveTasksConfig(cfg);
         }
         if (id === "sortOrder") {
-          cfg.sortOrder = newValue as "id" | "status";
+          cfg.sortOrder = newValue as TasksConfig["sortOrder"];
           saveTasksConfig(cfg);
         }
       },

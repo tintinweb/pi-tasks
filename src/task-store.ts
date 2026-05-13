@@ -19,7 +19,15 @@ function sortByStatus(a: Task, b: Task): number {
   return rank(a.status) - rank(b.status) || Number(a.id) - Number(b.id);
 }
 
-const SORT_FNS = { id: sortById, status: sortByStatus };
+function sortByRecent(a: Task, b: Task): number {
+  return b.updatedAt - a.updatedAt || Number(b.id) - Number(a.id);
+}
+
+function sortByOldest(a: Task, b: Task): number {
+  return a.updatedAt - b.updatedAt || Number(a.id) - Number(b.id);
+}
+
+const SORT_FNS = { id: sortById, status: sortByStatus, recent: sortByRecent, oldest: sortByOldest };
 
 const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const LOCK_RETRY_MS = 50;
@@ -146,7 +154,7 @@ export class TaskStore {
   }
 
   /** List all tasks, sorted by the given order (defaults to ID ascending). */
-  list(sortOrder: "id" | "status" = "id"): Task[] {
+  list(sortOrder: "id" | "status" | "recent" | "oldest" = "id"): Task[] {
     if (this.filePath) this.load();
     return Array.from(this.tasks.values()).sort(SORT_FNS[sortOrder]);
   }
