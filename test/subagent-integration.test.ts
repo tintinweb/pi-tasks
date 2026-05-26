@@ -1159,3 +1159,148 @@ describe("Cascade data injection (buildTaskPrompt)", () => {
     expect(bPrompt).not.toContain("Prerequisite task results");
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────────
+// TaskCreate batch tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe("TaskCreate batch mode", () => {
+  let mock: ReturnType<typeof mockPi>;
+
+  beforeEach(() => {
+    mock = mockPi();
+    initExtension(mock.pi as any);
+  });
+
+  it("creates multiple tasks via tasks array", async () => {
+    const result = await mock.executeTool("TaskCreate", {
+      tasks: [
+        { subject: "Step one", description: "Do the first thing" },
+        { subject: "Step two", description: "Do the second thing" },
+        { subject: "Step three", description: "Do the third thing" },
+      ],
+    });
+
+    const text = result.content[0].text as string;
+    expect(text).toContain("Created 3 tasks");
+    expect(text).toContain("#1 Step one");
+    expect(text).toContain("#2 Step two");
+    expect(text).toContain("#3 Step three");
+  });
+
+  it("created batch tasks appear in TaskList", async () => {
+    await mock.executeTool("TaskCreate", {
+      tasks: [
+        { subject: "Alpha", description: "A" },
+        { subject: "Beta", description: "B" },
+      ],
+    });
+
+    const list = await mock.executeTool("TaskList", {});
+    const text = list.content[0].text as string;
+    expect(text).toContain("Alpha");
+    expect(text).toContain("Beta");
+  });
+
+  it("supports agentType stored in metadata for batch tasks", async () => {
+    await mock.executeTool("TaskCreate", {
+      tasks: [
+        { subject: "Agent task", description: "Run me", agentType: "general-purpose" },
+      ],
+    });
+
+    const details = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(details.content[0].text).toContain("general-purpose");
+  });
+
+  it("batch IDs are sequential after prior TaskCreate calls", async () => {
+    await mock.executeTool("TaskCreate", {
+      subject: "Existing",
+      description: "Already here",
+    });
+
+    const result = await mock.executeTool("TaskCreate", {
+      tasks: [
+        { subject: "Bulk A", description: "D" },
+        { subject: "Bulk B", description: "D" },
+      ],
+    });
+
+    const text = result.content[0].text as string;
+    expect(text).toContain("#2 Bulk A");
+    expect(text).toContain("#3 Bulk B");
+  });
+
+  it("returns singular wording for a single task in array", async () => {
+    const result = await mock.executeTool("TaskCreate", {
+      tasks: [{ subject: "Just one", description: "Lonely task" }],
+    });
+
+    expect(result.content[0].text).toContain("Created 1 task:");
+  });
+
+  it("rejects mixing tasks array with subject/description", async () => {
+    const result = await mock.executeTool("TaskCreate", {
+      tasks: [{ subject: "A", description: "D" }],
+      subject: "Conflicting",
+      description: "Should not work",
+    });
+
+    expect(result.content[0].text).toContain("Error");
+    expect(result.content[0].text).toContain("Cannot use");
+  });
+
+  it("requires subject and description when not using tasks array", async () => {
+    const result = await mock.executeTool("TaskCreate", {
+      subject: "Missing description",
+    });
+
+    expect(result.content[0].text).toContain("Error");
+    expect(result.content[0].text).toContain("required");
+  });
+
+  it("backward-compatible single task creation still works", async () => {
+    const result = await mock.executeTool("TaskCreate", {
+      subject: "Fix auth bug",
+      description: "Fix the login flow",
+      activeForm: "Fixing auth bug",
+    });
+
+    expect(result.content[0].text).toContain("Task #1 created successfully: Fix auth bug");
+  });
+
+  it("preserves activeForm and metadata in batch tasks", async () => {
+    await mock.executeTool("TaskCreate", {
+      tasks: [
+        { subject: "A", description: "D", activeForm: "Doing A", metadata: { priority: "high" } },
+        { subject: "B", description: "D" },
+      ],
+    });
+
+    const taskA = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(taskA.content[0].text).toContain("priority");
+    expect(taskA.content[0].text).toContain("high");
+
+    const taskB = await mock.executeTool("TaskGet", { taskId: "2" });
+    const taskBText = taskB.content[0].text as string;
+    expect(taskBText).toContain("B");
+    // Task B should not have priority metadata
+    expect(taskBText).not.toContain("priority");
+  });
+
+  it("batch creation is atomic — all tasks appear after call", async () => {
+    await mock.executeTool("TaskCreate", {
+      tasks: [
+        { subject: "One", description: "1" },
+        { subject: "Two", description: "2" },
+        { subject: "Three", description: "3" },
+      ],
+    });
+
+    const list = await mock.executeTool("TaskList", {});
+    const text = list.content[0].text as string;
+    expect(text).toContain("One");
+    expect(text).toContain("Two");
+    expect(text).toContain("Three");
+  });
+});

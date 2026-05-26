@@ -2,7 +2,7 @@
  * @tintinweb/pi-tasks — A pi extension providing Claude Code-style task tracking and coordination.
  *
  * Tools:
- *   TaskCreate   — Create a structured task
+ *   TaskCreate   — Create one or more structured tasks (single or batch)
  *   TaskList     — List all tasks with status
  *   TaskGet      — Get full task details
  *   TaskUpdate   — Update task fields, status, dependencies
@@ -620,6 +620,13 @@ Skip using this tool when:
 
 NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
 
+## Creating Single vs Multiple Tasks
+
+- **Single task**: Provide \`subject\` and \`description\` (plus optional \`activeForm\`, \`agentType\`, \`metadata\`).
+- **Multiple tasks**: Provide a \`tasks\` array instead. Each item has its own \`subject\`, \`description\`, and optional \`activeForm\`, \`agentType\`, \`metadata\`.
+- Using \`tasks\` is more efficient than calling \`TaskCreate\` repeatedly — it creates all tasks in a single atomic operation.
+- You cannot mix \`subject\`/\`description\` with \`tasks\` — use one or the other.
+
 ## Task Fields
 
 - **subject**: A brief, actionable title in imperative form (e.g., "Fix authentication bug in login flow")
@@ -636,16 +643,29 @@ All tasks are created with status \`pending\`.
 - Check TaskList first to avoid creating duplicate tasks
 - Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute`,
     promptGuidelines: [
-      "When working on complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status.",
+      "When working with complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status.",
       "Mark tasks as in_progress before starting work and completed when done.",
       "Use TaskList to check for available work after completing a task.",
+      "Prefer using the `tasks` array to batch-create multiple tasks at once instead of calling TaskCreate repeatedly.",
     ],
     parameters: Type.Object({
-      subject: Type.String({ description: "A brief title for the task" }),
-      description: Type.String({ description: "A detailed description of what needs to be done" }),
+      // Single-task parameters (backward compatible)
+      subject: Type.Optional(Type.String({ description: "A brief title for the task. Use this for a single task, or use `tasks` for multiple." })),
+      description: Type.Optional(Type.String({ description: "A detailed description of what needs to be done. Use this for a single task, or use `tasks` for multiple." })),
       activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
       agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
       metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
+      // Batch parameter
+      tasks: Type.Optional(Type.Array(
+        Type.Object({
+          subject: Type.String({ description: "A brief title for the task" }),
+          description: Type.String({ description: "A detailed description of what needs to be done" }),
+          activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress" })),
+          agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution via TaskExecute" })),
+          metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
+        }),
+        { description: "Array of tasks to create in batch. Use this instead of subject/description for creating multiple tasks at once.", minItems: 1 },
+      )),
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
@@ -653,7 +673,40 @@ All tasks are created with status \`pending\`.
       // cannot be relied on for that: they only tick at `turn_start`, so a run that ends
       // right after its last completion freezes one mid-count.
       autoClear.startNewBatch();
-      const meta = params.metadata ?? {};
+
+      const hasTasks = params.tasks && params.tasks.length > 0;
+      const hasScalar = params.subject !== undefined || params.description !== undefined;
+
+      if (hasTasks && hasScalar) {
+        return Promise.resolve(textResult("Error: Cannot use `tasks` array and `subject`/`description` together. Use one or the other."));
+      }
+
+      if (hasTasks) {
+        // Batch creation
+        const items = params.tasks!.map(t => {
+          const meta = t.metadata ? { ...t.metadata } : {};
+          if (t.agentType) meta.agentType = t.agentType;
+          return {
+            subject: t.subject,
+            description: t.description,
+            activeForm: t.activeForm,
+            metadata: Object.keys(meta).length > 0 ? meta : undefined,
+          } as { subject: string; description: string; activeForm?: string; metadata?: Record<string, any> };
+        });
+        const created = store.createMany(items);
+        widget.update();
+        const lines = [`Created ${created.length} task${created.length === 1 ? "" : "s"}:`];
+        for (const task of created) {
+          lines.push(`  #${task.id} ${task.subject}`);
+        }
+        return Promise.resolve(textResult(lines.join("\n")));
+      }
+
+      // Single-task creation (backward compatible)
+      if (!params.subject || !params.description) {
+        return Promise.resolve(textResult("Error: `subject` and `description` are required when not using `tasks`. Provide both, or use `tasks` for batch creation."));
+      }
+      const meta = params.metadata ? { ...params.metadata } : {};
       if (params.agentType) meta.agentType = params.agentType;
       const task = store.create(params.subject, params.description, params.activeForm, Object.keys(meta).length > 0 ? meta : undefined);
       widget.update();

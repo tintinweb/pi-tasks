@@ -628,3 +628,82 @@ describe("TaskStore (malformed files)", () => {
     expect(new TaskStore(file).create("Next", "d").id).toBe("42");
   });
 });
+
+describe("TaskStore createMany", () => {
+  let store: TaskStore;
+
+  beforeEach(() => {
+    store = new TaskStore();
+  });
+
+  it("creates multiple tasks with sequential IDs", () => {
+    const created = store.createMany([
+      { subject: "Task A", description: "Desc A" },
+      { subject: "Task B", description: "Desc B" },
+      { subject: "Task C", description: "Desc C" },
+    ]);
+
+    expect(created).toHaveLength(3);
+    expect(created.map(t => t.id)).toEqual(["1", "2", "3"]);
+    expect(created.map(t => t.subject)).toEqual(["Task A", "Task B", "Task C"]);
+    expect(store.list()).toHaveLength(3);
+  });
+
+  it("sets status to pending for all created tasks", () => {
+    const created = store.createMany([
+      { subject: "A", description: "D" },
+      { subject: "B", description: "D" },
+    ]);
+    expect(created.every(t => t.status === "pending")).toBe(true);
+  });
+
+  it("preserves activeForm and metadata per task", () => {
+    const created = store.createMany([
+      { subject: "A", description: "D", activeForm: "Doing A", metadata: { key: "val" } },
+      { subject: "B", description: "D" },
+    ]);
+    expect(created[0].activeForm).toBe("Doing A");
+    expect(created[0].metadata).toEqual({ key: "val" });
+    expect(created[1].activeForm).toBeUndefined();
+    expect(created[1].metadata).toEqual({});
+  });
+
+  it("continues ID counter from existing tasks", () => {
+    store.create("Existing", "Desc");
+    const created = store.createMany([
+      { subject: "Bulk A", description: "D" },
+      { subject: "Bulk B", description: "D" },
+    ]);
+    expect(created.map(t => t.id)).toEqual(["2", "3"]);
+  });
+
+  it("returns empty array for empty input", () => {
+    const created = store.createMany([]);
+    expect(created).toEqual([]);
+    expect(store.list()).toHaveLength(0);
+  });
+
+  it("persists bulk-created tasks in file-backed mode", () => {
+    const testId = `test-bulk-${Date.now()}`;
+    const tasksDir = join(homedir(), ".pi", "tasks");
+    const filePath = join(tasksDir, `${testId}.json`);
+
+    try {
+      const store1 = new TaskStore(testId);
+      store1.createMany([
+        { subject: "Persisted A", description: "D" },
+        { subject: "Persisted B", description: "D" },
+      ]);
+
+      const store2 = new TaskStore(testId);
+      const tasks = store2.list();
+      expect(tasks).toHaveLength(2);
+      expect(tasks[0].subject).toBe("Persisted A");
+      expect(tasks[1].subject).toBe("Persisted B");
+    } finally {
+      try { rmSync(filePath); } catch { /* */ }
+      try { rmSync(filePath + ".lock"); } catch { /* */ }
+      try { rmSync(filePath + ".tmp"); } catch { /* */ }
+    }
+  });
+});
