@@ -620,12 +620,6 @@ Skip using this tool when:
 
 NOTE that you should not use this tool if there is only one trivial task to do. In this case you are better off just doing the task directly.
 
-## Creating Single vs Multiple Tasks
-
-- **Single task**: Provide \`subject\` and \`description\` (plus optional \`activeForm\`, \`agentType\`, \`metadata\`).
-- **Multiple tasks**: Provide a \`tasks\` array instead. Each item has its own \`subject\`, \`description\`, and optional \`activeForm\`, \`agentType\`, \`metadata\`.
-- Using \`tasks\` is more efficient than calling \`TaskCreate\` repeatedly — it creates all tasks in a single atomic operation.
-- You cannot mix \`subject\`/\`description\` with \`tasks\` — use one or the other.
 
 ## Task Fields
 
