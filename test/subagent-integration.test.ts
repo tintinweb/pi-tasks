@@ -1174,7 +1174,7 @@ describe("TaskCreate batch mode", () => {
 
   it("creates multiple tasks via tasks array", async () => {
     const result = await mock.executeTool("TaskCreate", {
-      tasks: [
+      batch: [
         { subject: "Step one", description: "Do the first thing" },
         { subject: "Step two", description: "Do the second thing" },
         { subject: "Step three", description: "Do the third thing" },
@@ -1190,7 +1190,7 @@ describe("TaskCreate batch mode", () => {
 
   it("created batch tasks appear in TaskList", async () => {
     await mock.executeTool("TaskCreate", {
-      tasks: [
+      batch: [
         { subject: "Alpha", description: "A" },
         { subject: "Beta", description: "B" },
       ],
@@ -1204,7 +1204,7 @@ describe("TaskCreate batch mode", () => {
 
   it("supports agentType stored in metadata for batch tasks", async () => {
     await mock.executeTool("TaskCreate", {
-      tasks: [
+      batch: [
         { subject: "Agent task", description: "Run me", agentType: "general-purpose" },
       ],
     });
@@ -1220,7 +1220,7 @@ describe("TaskCreate batch mode", () => {
     });
 
     const result = await mock.executeTool("TaskCreate", {
-      tasks: [
+      batch: [
         { subject: "Bulk A", description: "D" },
         { subject: "Bulk B", description: "D" },
       ],
@@ -1233,7 +1233,7 @@ describe("TaskCreate batch mode", () => {
 
   it("returns singular wording for a single task in array", async () => {
     const result = await mock.executeTool("TaskCreate", {
-      tasks: [{ subject: "Just one", description: "Lonely task" }],
+      batch: [{ subject: "Just one", description: "Lonely task" }],
     });
 
     expect(result.content[0].text).toContain("Created 1 task:");
@@ -1241,7 +1241,7 @@ describe("TaskCreate batch mode", () => {
 
   it("rejects mixing tasks array with subject/description", async () => {
     const result = await mock.executeTool("TaskCreate", {
-      tasks: [{ subject: "A", description: "D" }],
+      batch: [{ subject: "A", description: "D" }],
       subject: "Conflicting",
       description: "Should not work",
     });
@@ -1271,7 +1271,7 @@ describe("TaskCreate batch mode", () => {
 
   it("preserves activeForm and metadata in batch tasks", async () => {
     await mock.executeTool("TaskCreate", {
-      tasks: [
+      batch: [
         { subject: "A", description: "D", activeForm: "Doing A", metadata: { priority: "high" } },
         { subject: "B", description: "D" },
       ],
@@ -1290,7 +1290,7 @@ describe("TaskCreate batch mode", () => {
 
   it("batch creation is atomic — all tasks appear after call", async () => {
     await mock.executeTool("TaskCreate", {
-      tasks: [
+      batch: [
         { subject: "One", description: "1" },
         { subject: "Two", description: "2" },
         { subject: "Three", description: "3" },

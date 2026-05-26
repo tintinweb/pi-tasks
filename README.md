@@ -90,7 +90,7 @@ See [Writing your own sort order](CUSTOMIZING.md#writing-your-own-sort-order) fo
 
 ### `TaskCreate`
 
-Create one or more structured tasks. Pass `subject` and `description` for a single task, or a `tasks` array for batch creation.
+Create one or more structured tasks. Pass `subject` and `description` for a single task, or a `batch` array for batch creation.
 
 **Single task** (backward compatible):
 
@@ -102,20 +102,20 @@ Create one or more structured tasks. Pass `subject` and `description` for a sing
 | `agentType` | string | no | Agent type for subagent execution (e.g., `"general-purpose"`, `"Explore"`) |
 | `metadata` | object | no | Arbitrary key-value pairs |
 
-*\*Required when not using `tasks`.*
+*\*Required when not using `batch`.*
 
-**Batch creation** (via `tasks` array):
+**Batch creation** (via `batch` array):
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `tasks` | array | yes* | Array of task objects (min 1 item). Mutually exclusive with `subject`/`description`. |
-| `tasks[].subject` | string | yes | Brief imperative title |
-| `tasks[].description` | string | yes | Detailed context and acceptance criteria |
-| `tasks[].activeForm` | string | no | Present continuous form for spinner |
-| `tasks[].agentType` | string | no | Agent type for subagent execution via TaskExecute |
-| `tasks[].metadata` | object | no | Arbitrary key-value pairs |
+| `batch` | array | yes* | Array of task items (min 1 item). Mutually exclusive with `subject`/`description`. |
+| `batch[].subject` | string | yes | Brief imperative title |
+| `batch[].description` | string | yes | Detailed context and acceptance criteria |
+| `batch[].activeForm` | string | no | Present continuous form for spinner |
+| `batch[].agentType` | string | no | Agent type for subagent execution via TaskExecute |
+| `batch[].metadata` | object | no | Arbitrary key-value pairs |
 
-*\*Required when not using `subject`/`description`. You cannot mix `tasks` with `subject`/`description`.*
+*\*Required when not using `subject`/`description`. You cannot mix `batch` with `subject`/`description`.*
 
 ```
 → Task #1 created successfully: Fix authentication bug
@@ -124,7 +124,7 @@ Create one or more structured tasks. Pass `subject` and `description` for a sing
 Batch example:
 ```json
 {
-  "tasks": [
+  "batch": [
     { "subject": "Design the API", "description": "Decide the shape" },
     { "subject": "Implement the handler", "description": "Write the code" },
     { "subject": "Write tests", "description": "Cover edge cases" }

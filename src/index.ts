@@ -640,17 +640,17 @@ All tasks are created with status \`pending\`.
       "When working with complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status.",
       "Mark tasks as in_progress before starting work and completed when done.",
       "Use TaskList to check for available work after completing a task.",
-      "Prefer using the `tasks` array to batch-create multiple tasks at once instead of calling TaskCreate repeatedly.",
+      "Prefer using the `batch` array to create multiple tasks at once instead of calling TaskCreate repeatedly.",
     ],
     parameters: Type.Object({
       // Single-task parameters (backward compatible)
-      subject: Type.Optional(Type.String({ description: "A brief title for the task. Use this for a single task, or use `tasks` for multiple." })),
-      description: Type.Optional(Type.String({ description: "A detailed description of what needs to be done. Use this for a single task, or use `tasks` for multiple." })),
+      subject: Type.Optional(Type.String({ description: "A brief title for the task. Use this for a single task, or use `batch` for multiple." })),
+      description: Type.Optional(Type.String({ description: "A detailed description of what needs to be done. Use this for a single task, or use `batch` for multiple." })),
       activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
       agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
       metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
-      // Batch parameter
-      tasks: Type.Optional(Type.Array(
+      // Batch parameter — pass an array to create multiple tasks in one call
+      batch: Type.Optional(Type.Array(
         Type.Object({
           subject: Type.String({ description: "A brief title for the task" }),
           description: Type.String({ description: "A detailed description of what needs to be done" }),
@@ -658,7 +658,7 @@ All tasks are created with status \`pending\`.
           agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution via TaskExecute" })),
           metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
         }),
-        { description: "Array of tasks to create in batch. Use this instead of subject/description for creating multiple tasks at once.", minItems: 1 },
+        { description: "Array of task items to create in one call. Mutually exclusive with subject/description.", minItems: 1 },
       )),
     }),
 
@@ -668,16 +668,16 @@ All tasks are created with status \`pending\`.
       // right after its last completion freezes one mid-count.
       autoClear.startNewBatch();
 
-      const hasTasks = params.tasks && params.tasks.length > 0;
+      const hasBatch = params.batch && params.batch.length > 0;
       const hasScalar = params.subject !== undefined || params.description !== undefined;
 
-      if (hasTasks && hasScalar) {
-        return Promise.resolve(textResult("Error: Cannot use `tasks` array and `subject`/`description` together. Use one or the other."));
+      if (hasBatch && hasScalar) {
+        return Promise.resolve(textResult("Error: Cannot use `batch` array and `subject`/`description` together. Use one or the other."));
       }
 
-      if (hasTasks) {
+      if (hasBatch) {
         // Batch creation
-        const items = params.tasks!.map(t => {
+        const items = params.batch!.map(t => {
           const meta = t.metadata ? { ...t.metadata } : {};
           if (t.agentType) meta.agentType = t.agentType;
           return {
@@ -698,7 +698,7 @@ All tasks are created with status \`pending\`.
 
       // Single-task creation (backward compatible)
       if (!params.subject || !params.description) {
-        return Promise.resolve(textResult("Error: `subject` and `description` are required when not using `tasks`. Provide both, or use `tasks` for batch creation."));
+        return Promise.resolve(textResult("Error: `subject` and `description` are required when not using `batch`. Provide both, or use `batch` for batch creation."));
       }
       const meta = params.metadata ? { ...params.metadata } : {};
       if (params.agentType) meta.agentType = params.agentType;
