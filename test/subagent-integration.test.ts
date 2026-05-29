@@ -481,6 +481,32 @@ describe("Standalone operation (no subagents extension)", () => {
     expect(result.content[0].text).toContain("Write tests");
   });
 
+  it("TaskCreate can create multiple tasks in one call", async () => {
+    const result = await mock.executeTool("TaskCreate", {
+      tasks: [
+        { subject: "Design API", description: "Define endpoints", agentType: "Explore" },
+        { subject: "Implement API", description: "Build endpoints", activeForm: "Building endpoints" },
+      ],
+    });
+
+    expect(result.content[0].text).toContain("Created 2 tasks successfully");
+    expect(result.content[0].text).toContain("Task #1: Design API");
+    expect(result.content[0].text).toContain("Task #2: Implement API");
+
+    const first = await mock.executeTool("TaskGet", { taskId: "1" });
+    expect(first.content[0].text).toContain("Metadata: {\"agentType\":\"Explore\"}");
+
+    const list = await mock.executeTool("TaskList", {});
+    expect(list.content[0].text).toContain("#1 [pending] Design API");
+    expect(list.content[0].text).toContain("#2 [pending] Implement API");
+  });
+
+  it("TaskCreate rejects calls without single-task fields or bulk tasks", async () => {
+    await expect(mock.executeTool("TaskCreate", {})).rejects.toThrow(
+      "TaskCreate requires either subject + description, or a non-empty tasks array",
+    );
+  });
+
   it("TaskList works without subagents", async () => {
     await mock.executeTool("TaskCreate", { subject: "A", description: "desc" });
     await mock.executeTool("TaskCreate", { subject: "B", description: "desc" });

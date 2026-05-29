@@ -57,18 +57,38 @@ The extension renders a persistent widget above the editor:
 
 ### `TaskCreate`
 
-Create a structured task. Used proactively for complex multi-step work.
+Create one structured task, or create multiple tasks in one call with `tasks`. Used proactively for complex multi-step work.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `subject` | string | yes | Brief imperative title |
-| `description` | string | yes | Detailed context and acceptance criteria |
+| `subject` | string | yes* | Brief imperative title |
+| `description` | string | yes* | Detailed context and acceptance criteria |
 | `activeForm` | string | no | Present continuous form for spinner (e.g., "Running tests") |
 | `agentType` | string | no | Agent type for subagent execution (e.g., `"general-purpose"`, `"Explore"`) |
 | `metadata` | object | no | Arbitrary key-value pairs |
+| `tasks` | array | no* | Bulk task list. Each item accepts `subject`, `description`, `activeForm`, `agentType`, and `metadata`. |
+
+\* Provide either top-level `subject` + `description`, or a non-empty `tasks` array.
 
 ```
 → Task #1 created successfully: Fix authentication bug
+```
+
+Bulk example:
+
+```json
+{
+  "tasks": [
+    { "subject": "Design API", "description": "Define endpoints and data contracts" },
+    { "subject": "Implement API", "description": "Build endpoints after design is approved" }
+  ]
+}
+```
+
+```
+→ Created 2 tasks successfully:
+  Task #1: Design API
+  Task #2: Implement API
 ```
 
 ### `TaskList`

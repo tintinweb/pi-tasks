@@ -426,9 +426,12 @@ NOTE that you should not use this tool if there is only one trivial task to do. 
 
 ## Task Fields
 
+TaskCreate supports either a single task using top-level fields, or multiple tasks using the \`tasks\` array.
+
 - **subject**: A brief, actionable title in imperative form (e.g., "Fix authentication bug in login flow")
 - **description**: Detailed description of what needs to be done, including context and acceptance criteria
 - **activeForm** (optional): Present continuous form shown in the spinner when the task is in_progress (e.g., "Fixing authentication bug"). If omitted, the spinner shows the subject instead.
+- **tasks** (optional): Array of task objects with the same fields for bulk creation. Use this when creating multiple related tasks at once.
 
 All tasks are created with status \`pending\`.
 
@@ -445,20 +448,52 @@ All tasks are created with status \`pending\`.
       "Use TaskList to check for available work after completing a task.",
     ],
     parameters: Type.Object({
-      subject: Type.String({ description: "A brief title for the task" }),
-      description: Type.String({ description: "A detailed description of what needs to be done" }),
+      subject: Type.Optional(Type.String({ description: "A brief title for the task" })),
+      description: Type.Optional(Type.String({ description: "A detailed description of what needs to be done" })),
       activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
       agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
       metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
+      tasks: Type.Optional(Type.Array(Type.Object({
+        subject: Type.String({ description: "A brief title for the task" }),
+        description: Type.String({ description: "A detailed description of what needs to be done" }),
+        activeForm: Type.Optional(Type.String({ description: "Present continuous form shown in spinner when in_progress (e.g., 'Running tests')" })),
+        agentType: Type.Optional(Type.String({ description: "Agent type for subagent execution (e.g., 'general-purpose', 'Explore'). Tasks with agentType can be started via TaskExecute." })),
+        metadata: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Arbitrary metadata to attach to the task" })),
+      }), { description: "Create multiple tasks in one call. Each task accepts subject, description, activeForm, agentType, and metadata." })),
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       autoClear.resetBatchCountdown();
-      const meta = params.metadata ?? {};
-      if (params.agentType) meta.agentType = params.agentType;
-      const task = store.create(params.subject, params.description, params.activeForm, Object.keys(meta).length > 0 ? meta : undefined);
+      const inputTasks = params.tasks ?? (
+        params.subject && params.description
+          ? [{
+              subject: params.subject,
+              description: params.description,
+              activeForm: params.activeForm,
+              agentType: params.agentType,
+              metadata: params.metadata,
+            }]
+          : []
+      );
+
+      if (inputTasks.length === 0) {
+        throw new Error("TaskCreate requires either subject + description, or a non-empty tasks array");
+      }
+
+      const created = inputTasks.map((input) => {
+        const meta = { ...(input.metadata ?? {}) };
+        if (input.agentType) meta.agentType = input.agentType;
+        return store.create(input.subject, input.description, input.activeForm, Object.keys(meta).length > 0 ? meta : undefined);
+      });
+
       widget.update();
-      return Promise.resolve(textResult(`Task #${task.id} created successfully: ${task.subject}`));
+      if (created.length === 1) {
+        const task = created[0];
+        return Promise.resolve(textResult(`Task #${task.id} created successfully: ${task.subject}`));
+      }
+      return Promise.resolve(textResult(
+        `Created ${created.length} tasks successfully:\n${created.map(task => `Task #${task.id}: ${task.subject}`).join("\n")}`,
+      ));
     },
   });
 
