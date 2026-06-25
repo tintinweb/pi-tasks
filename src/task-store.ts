@@ -35,6 +35,8 @@ const LOCK_MAX_RETRIES = 100; // 5s max
 
 /** Simple file-based locking. */
 function acquireLock(lockPath: string): void {
+  mkdirSync(dirname(lockPath), { recursive: true });
+
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
     try {
       // O_EXCL: fail if file exists
@@ -108,6 +110,7 @@ export class TaskStore {
       nextId: this.nextId,
       tasks: Array.from(this.tasks.values()),
     };
+    mkdirSync(dirname(this.filePath), { recursive: true });
     const tmpPath = this.filePath + ".tmp";
     writeFileSync(tmpPath, JSON.stringify(data, null, 2));
     renameSync(tmpPath, this.filePath);

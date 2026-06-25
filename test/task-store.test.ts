@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -459,5 +459,19 @@ describe("TaskStore (absolute path)", () => {
 
     const raw = JSON.parse(readFileSync(absFilePath, "utf-8"));
     expect(raw.tasks).toHaveLength(2);
+  });
+
+  it("recreates the parent directory before later mutations", () => {
+    const parentDir = join(tmpdir(), `pi-tasks-missing-parent-${Date.now()}`);
+    const filePath = join(parentDir, "tasks.json");
+    const store = new TaskStore(filePath);
+    store.create("Task", "Desc");
+
+    rmSync(parentDir, { recursive: true, force: true });
+
+    expect(() => store.clearCompleted()).not.toThrow();
+    expect(existsSync(filePath)).toBe(true);
+
+    rmSync(parentDir, { recursive: true, force: true });
   });
 });
