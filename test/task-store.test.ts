@@ -1,4 +1,4 @@
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -459,5 +459,27 @@ describe("TaskStore (absolute path)", () => {
 
     const raw = JSON.parse(readFileSync(absFilePath, "utf-8"));
     expect(raw.tasks).toHaveLength(2);
+  });
+
+  it("normalizes legacy persisted tasks missing newer fields", () => {
+    writeFileSync(absFilePath, JSON.stringify({
+      nextId: 2,
+      tasks: [{
+        id: "1",
+        subject: "Legacy task",
+        description: "Created before dependency fields existed",
+        status: "pending",
+        createdAt: 1000,
+        updatedAt: 1000,
+      }],
+    }));
+
+    const store = new TaskStore(absFilePath);
+    const task = store.get("1")!;
+
+    expect(task.metadata).toEqual({});
+    expect(task.blocks).toEqual([]);
+    expect(task.blockedBy).toEqual([]);
+    expect(store.create("Next task", "Desc").id).toBe("2");
   });
 });

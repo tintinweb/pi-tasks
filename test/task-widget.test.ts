@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskStore } from "../src/task-store.js";
 import { TaskWidget, type Theme, type UICtx } from "../src/ui/task-widget.js";
@@ -120,6 +123,37 @@ describe("TaskWidget", () => {
     const lines = renderWidget(ui.state);
     const blockedLine = lines.find(l => l.includes("Blocked"));
     expect(blockedLine).toContain("blocked by #1");
+  });
+
+  it("renders legacy persisted tasks without dependency arrays", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pi-tasks-widget-"));
+    const filePath = join(dir, "tasks.json");
+    writeFileSync(filePath, JSON.stringify({
+      nextId: 2,
+      tasks: [{
+        id: "1",
+        subject: "Legacy task",
+        description: "Created before dependency fields existed",
+        status: "pending",
+        createdAt: 1000,
+        updatedAt: 1000,
+      }],
+    }));
+
+    const legacyStore = new TaskStore(filePath);
+    const legacyWidget = new TaskWidget(legacyStore);
+    const legacyUi = mockUICtx();
+    legacyWidget.setUICtx(legacyUi.ctx);
+
+    try {
+      legacyWidget.update();
+      expect(() => renderWidget(legacyUi.state)).not.toThrow();
+      const lines = renderWidget(legacyUi.state);
+      expect(lines[1]).toContain("Legacy task");
+    } finally {
+      legacyWidget.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("hides completed blockers in blocked-by suffix", () => {
