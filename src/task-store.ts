@@ -33,6 +33,28 @@ const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_RETRIES = 100; // 5s max
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+/** Fill defaults for tasks persisted by older pi-tasks versions. */
+function normalizeTask(task: Partial<Task>, now: number): Task {
+  const createdAt = typeof task.createdAt === "number" ? task.createdAt : now;
+  return {
+    id: String(task.id),
+    subject: task.subject ?? "",
+    description: task.description ?? "",
+    status: task.status ?? "pending",
+    activeForm: task.activeForm,
+    owner: task.owner,
+    metadata: task.metadata && typeof task.metadata === "object" && !Array.isArray(task.metadata) ? task.metadata : {},
+    blocks: stringArray(task.blocks),
+    blockedBy: stringArray(task.blockedBy),
+    createdAt,
+    updatedAt: typeof task.updatedAt === "number" ? task.updatedAt : createdAt,
+  };
+}
+
 /** Simple file-based locking. */
 function acquireLock(lockPath: string): void {
   for (let i = 0; i < LOCK_MAX_RETRIES; i++) {
@@ -93,10 +115,12 @@ export class TaskStore {
     if (!existsSync(this.filePath)) return;
     try {
       const data: TaskStoreData = JSON.parse(readFileSync(this.filePath, "utf-8"));
+      const now = Date.now();
       this.nextId = data.nextId;
       this.tasks.clear();
       for (const t of data.tasks) {
-        this.tasks.set(t.id, t);
+        const task = normalizeTask(t, now);
+        this.tasks.set(task.id, task);
       }
     } catch { /* corrupt file — start fresh */ }
   }
