@@ -30,6 +30,7 @@ import {
 } from "./reminder-cadence.js";
 import { TaskStore } from "./task-store.js";
 import { loadTasksConfig } from "./tasks-config.js";
+import type { Task } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
 
@@ -55,9 +56,41 @@ const REMINDER_INTERVAL = 4;
 /** How many turns completed tasks linger before auto-clearing. */
 const AUTO_CLEAR_DELAY = 4;
 
-const SYSTEM_REMINDER = `<system-reminder>
-The task tools haven't been used recently. If you're working on tasks that would benefit from tracking progress, consider using TaskCreate to add new tasks and TaskUpdate to update task status (set to in_progress when starting, completed when done). Also consider cleaning up the task list if it has become stale. Only use these if relevant to the current work. This is just a gentle reminder - ignore if not applicable. Make sure that you NEVER mention this reminder to the user
-</system-reminder>`;
+/** Build a context-aware system reminder that mentions specific in_progress tasks. */
+function buildSystemReminder(tasks: Task[]): string {
+  const inProgress = tasks.filter(t => t.status === "in_progress");
+  const pending = tasks.filter(t => t.status === "pending");
+
+  const lines: string[] = ['<system-reminder>'];
+  lines.push('The task tools haven\'t been used recently.');
+
+  if (inProgress.length > 0) {
+    lines.push('');
+    lines.push('The following task(s) are still marked as in_progress:');
+    for (const t of inProgress) {
+      lines.push(`  #${t.id} — ${t.subject}`);
+    }
+    lines.push('');
+    lines.push('If you have completed any of these, use TaskUpdate to mark them as completed.');
+    lines.push('If they are still in progress, ignore this reminder.');
+  }
+
+  if (pending.length > 0 && inProgress.length === 0) {
+    lines.push('');
+    lines.push('Pending tasks are waiting — use TaskList to check if any are unblocked and ready to start.');
+  }
+
+  if (inProgress.length === 0 && pending.length === 0) {
+    lines.push(' Consider using TaskCreate to track progress if working on multi-step tasks.');
+  }
+
+  lines.push('');
+  lines.push('Only use task tools if relevant to the current work. This is just a gentle reminder — ignore if not applicable.');
+  lines.push('Make sure that you NEVER mention this reminder to the user');
+  lines.push('</system-reminder>');
+
+  return lines.join('\n');
+}
 
 export default function (pi: ExtensionAPI) {
   // Initialize store and config
@@ -306,6 +339,12 @@ export default function (pi: ExtensionAPI) {
   // ── Turn tracking for system-reminder injection ──
   // Cadence decisions live in `reminder-cadence.ts` so they're
   // unit-testable without spinning up a fake ExtensionAPI.
+
+  /** Compute effective reminder interval — shorter when tasks are in_progress. */
+  function effectiveInterval(): number {
+    return store.list().some(t => t.status === "in_progress") ? 2 : REMINDER_INTERVAL;
+  }
+
   const cadence = createCadenceState();
   const cadenceConfig: CadenceConfig = {
     reminderInterval: REMINDER_INTERVAL,
@@ -320,12 +359,29 @@ export default function (pi: ExtensionAPI) {
     if (autoClear.onTurnStart(cadence.currentTurn)) widget.update();
   });
 
-  // ── Token usage tracking ──
+  // ── Token usage tracking + stale-task detection ──
   // Feed per-turn token counts from assistant messages into the widget.
+  // Also detect when the agent has stopped referencing tasks but left
+  // them in_progress — schedule a reminder for the next LLM call.
   pi.on("turn_end", async (event) => {
     const msg = event.message as any;
     if (msg?.role === "assistant" && msg.usage) {
       widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0);
+    }
+
+    // Stale-task detection: if in_progress tasks exist and the agent hasn't
+    // used task tools for >= effectiveInterval turns, schedule a reminder.
+    // This catches the case where the agent completes work without calling
+    // TaskUpdate and then speaks without using any tools.
+    if (!cadence.reminderInjectedThisCycle && !cadence.reminderDue) {
+      const tasks = store.list();
+      const hasInProgress = tasks.some(t => t.status === "in_progress");
+      if (hasInProgress) {
+        const gap = cadence.currentTurn - cadence.lastTaskToolUseTurn;
+        if (gap >= effectiveInterval()) {
+          cadence.reminderDue = true;
+        }
+      }
     }
   });
 
@@ -340,19 +396,22 @@ export default function (pi: ExtensionAPI) {
   // before each LLM call and returns a modified copy of the messages
   // without persisting or polluting any tool output.
   pi.on("tool_result", async (event) => {
-    // Cheap-first: avoid store.list() disk I/O unless the cadence helper
-    // says the call could matter (i.e. it's a task tool that resets state,
-    // or it might queue the reminder).
     const isTaskTool = TASK_TOOL_NAMES.has(event.toolName);
-    if (
-      !isTaskTool &&
-      cadence.currentTurn - cadence.lastTaskToolUseTurn < REMINDER_INTERVAL
-    ) {
+
+    if (isTaskTool) {
+      // Task tool usage resets cadence with the default interval
+      cadenceConfig.reminderInterval = REMINDER_INTERVAL;
+      evaluateToolResult(cadence, event.toolName, false, cadenceConfig);
       return {};
     }
-    if (!isTaskTool && cadence.reminderInjectedThisCycle) return {};
 
-    const hasTasks = isTaskTool ? false : store.list().length > 0;
+    // Non-task tool: use shorter interval when in_progress tasks exist.
+    // Skip if already injected this cycle to avoid unnecessary disk I/O.
+    if (cadence.reminderInjectedThisCycle) return {};
+
+    const tasks = store.list();
+    const hasTasks = tasks.length > 0;
+    cadenceConfig.reminderInterval = effectiveInterval();
     evaluateToolResult(cadence, event.toolName, hasTasks, cadenceConfig);
     return {};
   });
@@ -364,13 +423,14 @@ export default function (pi: ExtensionAPI) {
   // returns a transformed messages array used only for this one request.
   pi.on("context", async (event) => {
     if (!drainReminderForContext(cadence)) return {};
+    const tasks = store.list();
 
     return {
       messages: [
         ...event.messages,
         {
           role: "user" as const,
-          content: [{ type: "text" as const, text: SYSTEM_REMINDER }],
+          content: [{ type: "text" as const, text: buildSystemReminder(tasks) }],
           timestamp: Date.now(),
         },
       ],
