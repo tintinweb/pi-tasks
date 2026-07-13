@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Global task defaults** can be set in `<agent-dir>/tasks-config.json` (`~/.pi/agent/tasks-config.json` by default). Project settings in `<cwd>/.pi/tasks-config.json` override global values key by key, and the settings menu persists only project-level differences.
+
+### Changed
+- **The auto-cascade setting is easier to find** in `/tasks` → Settings because its label now uses the same "auto-cascade" terminology as the documentation.
+
 ## [0.7.1] - 2026-06-24
 
 ### Changed

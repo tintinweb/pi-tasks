@@ -42,7 +42,7 @@ export async function openSettingsMenu(
       },
       {
         id: "autoCascade",
-        label: "Auto-execute with agents",
+        label: "Auto-cascade agent tasks",
         description:
           "When ON: pending agent tasks start automatically once their dependencies complete. " +
           "When OFF: use TaskExecute to launch them manually.",

@@ -55,7 +55,7 @@ The extension renders a persistent widget above the editor:
 
 ### Widget display settings
 
-How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved to `.pi/tasks-config.json`). All defaults preserve the original behaviour.
+How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved as project overrides in `.pi/tasks-config.json`). All defaults preserve the original behaviour.
 
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
@@ -215,7 +215,21 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) are saved to `<cwd>/.pi/tasks-config.json`.
+Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) changed through `/tasks` are saved as project overrides in `<cwd>/.pi/tasks-config.json`.
+
+### Global defaults
+
+Put settings that should apply across projects in `<agent-dir>/tasks-config.json` (`~/.pi/agent/tasks-config.json` by default). The agent directory follows pi's configured agent path. Project settings in `<cwd>/.pi/tasks-config.json` take precedence key by key.
+
+For example, enable auto-cascade by default for every project:
+
+```json
+{
+  "autoCascade": true
+}
+```
+
+The `/tasks` settings menu writes only project overrides. Changing another setting in a project does not copy global defaults into that project's config.
 
 ### Override via environment variables
 
@@ -257,7 +271,7 @@ Tasks
 - **Create task** — input prompts for subject and description
 - **Clear completed** — remove all completed tasks
 - **Clear all** — remove all tasks regardless of status
-- **Settings** — configure task storage, auto-cascade, auto-clear completed tasks, and [widget display](#widget-display-settings) (sort order, max visible, show all, hidden position) — saved to `tasks-config.json`
+- **Settings** — configure project overrides for task storage, auto-cascade, auto-clear completed tasks, and [widget display](#widget-display-settings) (sort order, max visible, show all, hidden position)
 
 ## Cross-extension Communication with [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents)
 
@@ -317,7 +331,7 @@ src/
 ├── types.ts            # Task, TaskStatus, BackgroundProcess types
 ├── task-store.ts       # File-backed store with CRUD, dependencies, locking
 ├── auto-clear.ts       # Turn-based auto-clearing of completed tasks (AutoClearManager)
-├── tasks-config.ts     # Config persistence (taskScope, autoCascade, autoClearCompleted) → .pi/tasks-config.json
+├── tasks-config.ts     # Global defaults and project override persistence
 ├── process-tracker.ts  # Background process output buffering and stop
 └── ui/
     ├── task-widget.ts  # Persistent widget with status icons and spinner
