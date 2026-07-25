@@ -43,8 +43,20 @@ export type UICtx = {
   ): void;
 };
 
-/** Star spinner frames for animated active task indicator (matches Claude Code). */
-const SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
+/** Firework frames for the animated active task indicator (matches Claude Code). */
+const GHOSTTY_FIREWORK_BASE = ["·", "✢", "✳", "✶", "✻", "*"] as const;
+const DARWIN_FIREWORK_BASE = ["·", "✢", "✳", "✶", "✻", "✽"] as const;
+const PORTABLE_FIREWORK_BASE = ["·", "✢", "*", "✶", "✻", "✽"] as const;
+const FIREWORK_INTERVAL_MS = 120;
+
+function getFireworkBaseFrames(): readonly string[] {
+  if (process.env.TERM === "xterm-ghostty") return GHOSTTY_FIREWORK_BASE;
+  return process.platform === "darwin" ? DARWIN_FIREWORK_BASE : PORTABLE_FIREWORK_BASE;
+}
+
+function buildFireworkFrames(base: readonly string[]): readonly string[] {
+  return [...base, ...[...base].reverse()];
+}
 
 const DEFAULT_MAX_VISIBLE_TASKS = 10;
 
@@ -77,7 +89,8 @@ function formatTokens(n: number): string {
 
 export class TaskWidget {
   private uiCtx: UICtx | undefined;
-  private widgetFrame = 0;
+  private fireworkFrame = 0;
+  private readonly fireworkFrames = buildFireworkFrames(getFireworkBaseFrames());
   private widgetInterval: ReturnType<typeof setInterval> | undefined;
   /** IDs of tasks currently being actively executed (show spinner). */
   private activeTaskIds = new Set<string>();
@@ -104,6 +117,10 @@ export class TaskWidget {
   /** Add or remove a task from the active spinner set. */
   setActiveTask(taskId: string | undefined, active = true) {
     if (taskId && active) {
+      const hasActiveTask = [...this.activeTaskIds].some(id => this.store.get(id)?.status === "in_progress");
+      if (!hasActiveTask) {
+        this.fireworkFrame = 0;
+      }
       this.activeTaskIds.add(taskId);
       if (!this.metrics.has(taskId)) {
         this.metrics.set(taskId, { startedAt: Date.now(), inputTokens: 0, outputTokens: 0 });
@@ -130,7 +147,10 @@ export class TaskWidget {
   /** Ensure the widget update timer is running. */
   ensureTimer() {
     if (!this.widgetInterval) {
-      this.widgetInterval = setInterval(() => this.update(), 150);
+      this.widgetInterval = setInterval(() => {
+        this.fireworkFrame = (this.fireworkFrame + 1) % this.fireworkFrames.length;
+        this.update();
+      }, FIREWORK_INTERVAL_MS);
     }
   }
 
@@ -164,7 +184,7 @@ export class TaskWidget {
     if (pending.length > 0) parts.push(`${pending.length} open`);
     const statusText = `${tasks.length} tasks (${parts.join(", ")})`;
 
-    const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
+    const spinnerChar = this.fireworkFrames[this.fireworkFrame];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
     const showAll = this.config.showAll ?? false;
@@ -277,8 +297,6 @@ export class TaskWidget {
       clearInterval(this.widgetInterval);
       this.widgetInterval = undefined;
     }
-
-    this.widgetFrame++;
 
     // Transition: hidden → visible — register widget callback once
     if (!this.widgetRegistered) {

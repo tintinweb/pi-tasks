@@ -43,6 +43,34 @@ function renderWidget(state: ReturnType<typeof mockUICtx>["state"]): string[] {
   return result.render();
 }
 
+function activeIcons(lines: string[]): string[] {
+  return lines.slice(1).map(line => line.trimStart().split(" ")[0]);
+}
+
+async function renderAnimationCycle(platform: NodeJS.Platform, term: string): Promise<string[]> {
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  vi.stubEnv("TERM", term);
+  vi.resetModules();
+  const { TaskWidget: PlatformTaskWidget } = await import("../src/ui/task-widget.js");
+
+  const cycleStore = new TaskStore();
+  const cycleUI = mockUICtx();
+  const cycleWidget = new PlatformTaskWidget(cycleStore);
+  cycleWidget.setUICtx(cycleUI.ctx);
+  cycleStore.create("Animated task", "Desc", "Animating");
+  cycleStore.update("1", { status: "in_progress" });
+  cycleWidget.setActiveTask("1", true);
+
+  const frames = [activeIcons(renderWidget(cycleUI.state))[0]];
+  for (let index = 1; index < 12; index++) {
+    vi.advanceTimersByTime(120);
+    frames.push(activeIcons(renderWidget(cycleUI.state))[0]);
+  }
+  cycleWidget.dispose();
+  vi.restoreAllMocks();
+  return frames;
+}
+
 describe("TaskWidget", () => {
   let store: TaskStore;
   let widget: TaskWidget;
@@ -58,6 +86,8 @@ describe("TaskWidget", () => {
 
   afterEach(() => {
     widget.dispose();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   });
 
@@ -109,6 +139,96 @@ describe("TaskWidget", () => {
     expect(lines[1]).toContain("Processing data…");
     // Should NOT show ◼ for active task
     expect(lines[1]).not.toContain("◼");
+  });
+
+  it.each([
+    {
+      name: "Ghostty with platform precedence",
+      platform: "darwin" as NodeJS.Platform,
+      term: "xterm-ghostty",
+      expected: ["·", "✢", "✳", "✶", "✻", "*", "*", "✻", "✶", "✳", "✢", "·"],
+    },
+    {
+      name: "macOS outside Ghostty",
+      platform: "darwin" as NodeJS.Platform,
+      term: "xterm-256color",
+      expected: ["·", "✢", "✳", "✶", "✻", "✽", "✽", "✻", "✶", "✳", "✢", "·"],
+    },
+    {
+      name: "other platforms",
+      platform: "linux" as NodeJS.Platform,
+      term: "xterm-256color",
+      expected: ["·", "✢", "*", "✶", "✻", "✽", "✽", "✻", "✶", "*", "✢", "·"],
+    },
+  ])("renders the complete $name firework cycle", async ({ platform, term, expected }) => {
+    expect(await renderAnimationCycle(platform, term)).toEqual(expected);
+  });
+
+  it("advances the firework only on 120ms timer ticks", () => {
+    store.create("Running thing", "Desc", "Processing data");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+
+    const initialLines = renderWidget(ui.state);
+    expect(activeIcons(initialLines)).toEqual(["·"]);
+    expect(initialLines[1]).toMatch(/^\s{2}· #1 /);
+    widget.update();
+    widget.update();
+    expect(activeIcons(renderWidget(ui.state))).toEqual(["·"]);
+
+    vi.advanceTimersByTime(119);
+    expect(activeIcons(renderWidget(ui.state))).toEqual(["·"]);
+    vi.advanceTimersByTime(1);
+    expect(activeIcons(renderWidget(ui.state))).toEqual(["✢"]);
+  });
+
+  it("shares one timer and one lockstep phase across active tasks", () => {
+    store.create("Task A", "Desc", "Processing A");
+    store.create("Task B", "Desc", "Processing B");
+    store.update("1", { status: "in_progress" });
+    store.update("2", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(120);
+    widget.setActiveTask("2", true);
+
+    expect(vi.getTimerCount()).toBe(1);
+    expect(activeIcons(renderWidget(ui.state))).toEqual(["✢", "✢"]);
+  });
+
+  it("stops after the last active task and restarts from the first frame", () => {
+    store.create("Task A", "Desc", "Processing A");
+    store.create("Task B", "Desc", "Processing B");
+    store.update("1", { status: "in_progress" });
+    store.update("2", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+    widget.setActiveTask("2", true);
+    vi.advanceTimersByTime(120);
+
+    widget.setActiveTask("1", false);
+    expect(vi.getTimerCount()).toBe(1);
+    widget.setActiveTask("2", false);
+    expect(vi.getTimerCount()).toBe(0);
+
+    widget.setActiveTask("1", true);
+    expect(vi.getTimerCount()).toBe(1);
+    expect(activeIcons(renderWidget(ui.state))).toEqual(["·", "◼"]);
+  });
+
+  it("restarts from the first frame after the last active task becomes completed", () => {
+    store.create("Task A", "Desc", "Processing A");
+    store.create("Task B", "Desc", "Processing B");
+    store.update("1", { status: "in_progress" });
+    store.update("2", { status: "in_progress" });
+    widget.setActiveTask("1", true);
+    vi.advanceTimersByTime(120);
+
+    store.update("1", { status: "completed" });
+    widget.setActiveTask("2", true);
+
+    expect(vi.getTimerCount()).toBe(1);
+    expect(activeIcons(renderWidget(ui.state))).toEqual(["✔", "·"]);
   });
 
   it("shows blocked-by info for pending tasks", () => {
