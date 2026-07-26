@@ -55,16 +55,20 @@ The extension renders a persistent widget above the editor:
 
 ### Widget display settings
 
-How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved as project overrides in `.pi/tasks-config.json`). All defaults preserve the original behaviour.
+How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved as project overrides in `.pi/tasks-config.json`).
 
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
 | `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | `id` = creation order; `status` groups completed → in-progress → pending; `recent`/`oldest` = by last-updated time |
-| `maxVisible` | `5`–`100` | `10` | Caps how many task lines the widget shows (ignored when `showAll` is on) |
-| `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
-| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortOrder: status` to keep active work visible and fold completed tasks away |
+| `maxVisible` | `5`–`100` | `10` | Window size when the global tool view is collapsed and `showAll` is off |
+| `showAll` | `true` / `false` | `false` | When `true`, every task is always shown regardless of `maxVisible` |
+| `hiddenAt` | `bottom` / `top` | `bottom` | Retained for configuration compatibility; focused overflow windows use separate earlier/later markers |
 
-> Note: the widget's `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`), which is the reverse of the `TaskList` tool's pending-first order.
+When a collapsed list exceeds `maxVisible`, the widget starts at the first unfinished task in the configured sort order and displays up to `maxVisible` tasks. Separate `… N earlier` and `… N later` lines show hidden work on either side. If every task is complete, the final window is shown. Lists that fit within the limit remain fully visible.
+
+The task widget follows Pi's global tool expansion state (Ctrl-O by default): expand to show every task, then collapse to restore the focused window. The extension does not register or override that keybinding.
+
+> Note: the widget's `status` order is completed-first, which is the reverse of the `TaskList` tool's pending-first order.
 
 ## Tools
 

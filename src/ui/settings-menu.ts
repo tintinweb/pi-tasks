@@ -53,8 +53,8 @@ export async function openSettingsMenu(
         id: "showAll",
         label: "Show all tasks in widget",
         description:
-          "When ON, every task is shown regardless of the visible limit. " +
-          "When OFF, the list is capped by 'Max visible tasks'.",
+          "When ON, every task is always shown. " +
+          "When OFF, the widget uses a focused window unless Pi's global tool view is expanded.",
         currentValue: (cfg.showAll ?? false) ? "on" : "off",
         values: ["on", "off"],
       },
@@ -62,8 +62,8 @@ export async function openSettingsMenu(
         id: "maxVisible",
         label: "Max visible tasks in widget",
         description:
-          "Only applies when 'Show all tasks' is OFF. " +
-          "Caps how many task lines the widget shows.",
+          "Only applies when 'Show all tasks' is OFF and Pi's global tool view is collapsed. " +
+          "Sets the focused window size starting at the first unfinished task.",
         currentValue: String(cfg.maxVisible ?? 10),
         values: ["5", "10", "15", "20", "30", "50", "100"],
       },
@@ -80,8 +80,8 @@ export async function openSettingsMenu(
         id: "hiddenAt",
         label: "Hidden tasks position",
         description:
-          '"bottom" hides tasks from the end of the list. ' +
-          '"top" hides tasks from the start (useful with status sort to collapse completed tasks).',
+          "Legacy compatibility setting. The focused window now shows separate earlier/later markers " +
+          "and follows Pi's global tool expansion state.",
         currentValue: cfg.hiddenAt ?? "bottom",
         values: ["bottom", "top"],
       },

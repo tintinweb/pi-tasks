@@ -12,20 +12,6 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
 
-// ---- Truncation ----
-
-import type { Task } from "../types.js";
-
-function truncateFromTop(tasks: Task[], limit: number): Task[] {
-  return tasks.slice(-limit);
-}
-
-function truncateFromBottom(tasks: Task[], limit: number): Task[] {
-  return tasks.slice(0, limit);
-}
-
-const TRUNCATE_FNS = { top: truncateFromTop, bottom: truncateFromBottom };
-
 // ---- Types ----
 
 export type Theme = {
@@ -41,6 +27,7 @@ export type UICtx = {
     content: undefined | ((tui: any, theme: Theme) => { render(): string[]; invalidate(): void }),
     options?: { placement?: "aboveEditor" | "belowEditor" },
   ): void;
+  getToolsExpanded?(): boolean;
 };
 
 /** Star spinner frames for animated active task indicator (matches Claude Code). */
@@ -98,6 +85,13 @@ export class TaskWidget {
   }
 
   setUICtx(ctx: UICtx) {
+    if (this.uiCtx === ctx) return;
+
+    if (this.uiCtx && this.widgetRegistered) {
+      this.uiCtx.setWidget("tasks", undefined);
+    }
+    this.widgetRegistered = false;
+    this.tui = undefined;
     this.uiCtx = ctx;
   }
 
@@ -139,14 +133,14 @@ export class TaskWidget {
    *  empty for one frame. */
   private renderWidget(tui: any, theme: Theme): string[] {
     try {
-      return this.buildWidgetLines(tui, theme);
+      return this.buildWidgetLines(tui, theme, this.uiCtx?.getToolsExpanded?.() ?? false);
     } catch {
       return [];
     }
   }
 
   /** Build widget lines from current live state. */
-  private buildWidgetLines(tui: any, theme: Theme): string[] {
+  private buildWidgetLines(tui: any, theme: Theme, toolsExpanded = false): string[] {
     const sortOrder = this.config.sortOrder ?? "id";
     const tasks = this.store.list(sortOrder);
     const w = tui.terminal.columns;
@@ -167,18 +161,19 @@ export class TaskWidget {
     const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
-    const showAll = this.config.showAll ?? false;
+    const showAll = toolsExpanded || (this.config.showAll ?? false);
     const limit = this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS;
-    const hiddenAt = this.config.hiddenAt ?? "bottom";
-    const visible = showAll ? tasks : TRUNCATE_FNS[hiddenAt](tasks, limit);
+    const firstUnfinished = tasks.findIndex(task => task.status !== "completed");
+    const windowStart = firstUnfinished === -1
+      ? Math.max(0, tasks.length - limit)
+      : firstUnfinished;
+    const shouldWindow = !showAll && tasks.length > limit;
+    const visible = shouldWindow ? tasks.slice(windowStart, windowStart + limit) : tasks;
+    const hiddenBefore = shouldWindow ? windowStart : 0;
+    const hiddenAfter = shouldWindow ? tasks.length - windowStart - visible.length : 0;
 
-    const hiddenCount = tasks.length - visible.length;
-    const overflowLine = hiddenCount > 0
-      ? truncate(theme.fg("dim", `    … and ${hiddenCount} more`))
-      : undefined;
-
-    if (overflowLine && hiddenAt === "top") {
-      lines.push(overflowLine);
+    if (hiddenBefore > 0) {
+      lines.push(truncate(theme.fg("dim", `    … ${hiddenBefore} earlier`)));
     }
     for (let i = 0; i < visible.length; i++) {
       const task = visible[i];
@@ -235,8 +230,8 @@ export class TaskWidget {
       lines.push(truncate(text + suffix));
     }
 
-    if (overflowLine && hiddenAt !== "top") {
-      lines.push(overflowLine);
+    if (hiddenAfter > 0) {
+      lines.push(truncate(theme.fg("dim", `    … ${hiddenAfter} later`)));
     }
 
     return lines;
