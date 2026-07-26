@@ -64,7 +64,7 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 | `showAll` | `true` / `false` | `false` | When `true`, every task is always shown regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | Retained for configuration compatibility; focused overflow windows use separate earlier/later markers |
 
-When a collapsed list exceeds `maxVisible`, the widget starts at the first unfinished task in the configured sort order and displays up to `maxVisible` tasks. Separate `… N earlier` and `… N later` lines show hidden work on either side. If every task is complete, the final window is shown. Lists that fit within the limit remain fully visible.
+When a collapsed list exceeds `maxVisible`, the widget normally starts at the first unfinished task in the configured sort order. If fewer than `maxVisible` tasks remain, it backfills from earlier tasks so the window stays full. Separate `… N earlier` and `… N later` lines show hidden work on either side. If every task is complete, the final window is shown. Lists that fit within the limit remain fully visible.
 
 The task widget follows Pi's global tool expansion state (Ctrl-O by default): expand to show every task, then collapse to restore the focused window. The extension does not register or override that keybinding.
 

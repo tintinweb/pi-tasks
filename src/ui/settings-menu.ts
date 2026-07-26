@@ -63,7 +63,7 @@ export async function openSettingsMenu(
         label: "Max visible tasks in widget",
         description:
           "Only applies when 'Show all tasks' is OFF and Pi's global tool view is collapsed. " +
-          "Sets the focused window size starting at the first unfinished task.",
+          "Sets the focused window size, normally starting at the first unfinished task and backfilling near the end.",
         currentValue: String(cfg.maxVisible ?? 10),
         values: ["5", "10", "15", "20", "30", "50", "100"],
       },
