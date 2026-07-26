@@ -163,10 +163,11 @@ export class TaskWidget {
 
     const showAll = toolsExpanded || (this.config.showAll ?? false);
     const limit = this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS;
-    const firstUnfinished = tasks.findIndex(task => task.status !== "completed");
-    const windowStart = firstUnfinished === -1
-      ? Math.max(0, tasks.length - limit)
-      : firstUnfinished;
+    const focusIndex = tasks.findIndex(task => task.status !== "completed");
+    const windowStart = Math.min(
+      focusIndex === -1 ? tasks.length : focusIndex,
+      tasks.length - limit,
+    );
     const shouldWindow = !showAll && tasks.length > limit;
     const visible = shouldWindow ? tasks.slice(windowStart, windowStart + limit) : tasks;
     const hiddenBefore = shouldWindow ? windowStart : 0;

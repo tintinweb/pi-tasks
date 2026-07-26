@@ -203,6 +203,22 @@ describe("TaskWidget", () => {
     expect(lines[7]).toContain("3 later");
   });
 
+  it("shifts the window backward when the unfinished task is near the end", () => {
+    widget = new TaskWidget(store, { maxVisible: 5 });
+    widget.setUICtx(ui.ctx);
+    for (let i = 1; i <= 12; i++) store.create(`Task ${i}`, "Desc");
+    for (let i = 1; i <= 9; i++) store.update(String(i), { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines).toHaveLength(7); // header + earlier marker + 5 tasks
+    expect(lines[1]).toContain("7 earlier");
+    expect(lines[2]).toContain("Task 8");
+    expect(lines[6]).toContain("Task 12");
+    expect(lines.some(l => l.includes("Task 7"))).toBe(false);
+    expect(lines.some(l => l.includes("later"))).toBe(false);
+  });
+
   it("shows every task when a mixed-status list fits within the limit", () => {
     widget = new TaskWidget(store, { maxVisible: 10 });
     widget.setUICtx(ui.ctx);
