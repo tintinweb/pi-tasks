@@ -26,6 +26,7 @@ export async function openSettingsMenu(
   cfg: TasksConfig,
   onBack: () => Promise<void>,
   clearDelayTurns: number,
+  cwd: string,
 ): Promise<void> {
   await ui.custom((_tui, theme, _kb, done) => {
     const items: SettingItem[] = [
@@ -105,31 +106,31 @@ export async function openSettingsMenu(
       /* onChange */ (id, newValue) => {
         if (id === "autoCascade") {
           cfg.autoCascade = newValue === "on";
-          saveTasksConfig(cfg);
+          saveTasksConfig(cfg, cwd);
         }
         if (id === "taskScope") {
           cfg.taskScope = newValue as "memory" | "session" | "project";
-          saveTasksConfig(cfg);
+          saveTasksConfig(cfg, cwd);
         }
         if (id === "autoClearCompleted") {
           cfg.autoClearCompleted = newValue as TasksConfig["autoClearCompleted"];
-          saveTasksConfig(cfg);
+          saveTasksConfig(cfg, cwd);
         }
         if (id === "showAll") {
           cfg.showAll = newValue === "on";
-          saveTasksConfig(cfg);
+          saveTasksConfig(cfg, cwd);
         }
         if (id === "maxVisible") {
           cfg.maxVisible = Number(newValue);
-          saveTasksConfig(cfg);
+          saveTasksConfig(cfg, cwd);
         }
         if (id === "sortOrder") {
           cfg.sortOrder = newValue as TasksConfig["sortOrder"];
-          saveTasksConfig(cfg);
+          saveTasksConfig(cfg, cwd);
         }
         if (id === "hiddenAt") {
           cfg.hiddenAt = newValue as "top" | "bottom";
-          saveTasksConfig(cfg);
+          saveTasksConfig(cfg, cwd);
         }
       },
       /* onCancel */ () => done(undefined),

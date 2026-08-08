@@ -88,8 +88,10 @@ export function mockPi() {
 export type MockPi = ReturnType<typeof mockPi>;
 
 /** Minimal mock ExtensionContext. */
-export function mockCtx() {
+export function mockCtx(cwd = process.cwd()) {
   return {
+    // Task paths resolve against the session workspace, not the host process cwd.
+    cwd,
     model: { id: "test-model", name: "Test" },
     modelRegistry: {},
     ui: {
@@ -107,10 +109,10 @@ export function mockCtx() {
  * persisting (`pi --no-session`, `SessionManager.inMemory()`) reports a session ID
  * but no file. Pass `{ persisted: false }` for the latter.
  */
-export function mockSessionCtx(sessionId: string, opts?: { persisted?: boolean }) {
+export function mockSessionCtx(sessionId: string, opts?: { persisted?: boolean; cwd?: string }) {
   const sessionFile = opts?.persisted === false ? undefined : `/sessions/${sessionId}.jsonl`;
   return {
-    ...mockCtx(),
+    ...mockCtx(opts?.cwd),
     sessionManager: {
       getSessionId: vi.fn(() => sessionId),
       getSessionFile: vi.fn(() => sessionFile),

@@ -21,6 +21,7 @@ import { flush, installSubagentsMock, mockPi, mockSessionCtx } from "./helpers/m
 // these tests exercise.
 const config = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 vi.mock("../src/tasks-config.js", () => ({
+  loadGlobalTasksConfig: () => ({ ...config.current }),
   loadTasksConfig: () => ({ ...config.current }),
   saveTasksConfig: () => {},
 }));

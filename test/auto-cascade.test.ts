@@ -16,6 +16,7 @@ import { flush, installSubagentsMock, mockCtx, mockPi } from "./helpers/mock-pi.
 // developer's global <agentDir>/tasks-config.json leak into the results.
 const config = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 vi.mock("../src/tasks-config.js", () => ({
+  loadGlobalTasksConfig: () => ({ ...config.current }),
   loadTasksConfig: () => ({ ...config.current }),
   saveTasksConfig: () => {},
 }));

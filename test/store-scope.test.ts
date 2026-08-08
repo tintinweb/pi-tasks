@@ -2,8 +2,8 @@
  * Where tasks are stored: the taskScope config, the PI_TASKS override, and what
  * session_start does with an already-persisted list.
  *
- * process.cwd() is stubbed for every test — .pi/ in the real working directory holds
- * the developer's own task list and must never be written to by the suite.
+ * Every context carries a temp workspace: task paths resolve against ctx.cwd, and
+ * .pi/ in the real working directory holds the developer's own task list.
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -16,6 +16,7 @@ import { mockPi, mockSessionCtx } from "./helpers/mock-pi.js";
 
 const config = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 vi.mock("../src/tasks-config.js", () => ({
+  loadGlobalTasksConfig: () => ({ ...config.current }),
   loadTasksConfig: () => ({ ...config.current }),
   saveTasksConfig: () => {},
 }));
@@ -24,7 +25,6 @@ let cwd: string;
 
 beforeEach(() => {
   cwd = mkdtempSync(join(tmpdir(), "pi-tasks-scope-"));
-  vi.spyOn(process, "cwd").mockReturnValue(cwd);
   config.current = {};
   delete process.env.PI_TASKS;
 });
@@ -35,6 +35,9 @@ afterEach(() => {
   rmSync(cwd, { recursive: true, force: true });
 });
 
+/** Every context carries the workspace, since that is what task paths resolve against. */
+const ctxFor = (sessionId = "s1", opts?: { persisted?: boolean }) =>
+  mockSessionCtx(sessionId, { ...opts, cwd });
 const projectFile = () => join(cwd, ".pi", "tasks", "tasks.json");
 const sessionFile = (id: string) => join(cwd, ".pi", "tasks", `tasks-${id}.json`);
 
@@ -44,6 +47,7 @@ describe("taskScope: project", () => {
   it("persists to a single shared file", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxFor("s1"));
     await mock.executeTool("TaskCreate", { subject: "Shared", description: "d" });
 
     expect(existsSync(projectFile())).toBe(true);
@@ -53,10 +57,10 @@ describe("taskScope: project", () => {
   it("stays on the same file when the session changes", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
-    await mock.fireLifecycle("session_start", { reason: "startup" }, mockSessionCtx("s1"));
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxFor("s1"));
     await mock.executeTool("TaskCreate", { subject: "Before", description: "d" });
 
-    await mock.fireLifecycle("session_start", { reason: "new" }, mockSessionCtx("s2"));
+    await mock.fireLifecycle("session_start", { reason: "new" }, ctxFor("s2"));
     await mock.executeTool("TaskCreate", { subject: "After", description: "d" });
 
     expect(existsSync(sessionFile("s1"))).toBe(false);
@@ -71,7 +75,7 @@ describe("taskScope: memory", () => {
   it("never touches the filesystem", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
-    await mock.fireLifecycle("session_start", { reason: "startup" }, mockSessionCtx("s1"));
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxFor("s1"));
     await mock.executeTool("TaskCreate", { subject: "Ephemeral", description: "d" });
 
     expect(existsSync(join(cwd, ".pi"))).toBe(false);
@@ -81,10 +85,10 @@ describe("taskScope: memory", () => {
   it("clears tasks on /new, since there is no file to switch away from", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
-    await mock.fireLifecycle("session_start", { reason: "startup" }, mockSessionCtx("s1"));
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxFor("s1"));
     await mock.executeTool("TaskCreate", { subject: "Ephemeral", description: "d" });
 
-    await mock.fireLifecycle("session_start", { reason: "new" }, mockSessionCtx("s2"));
+    await mock.fireLifecycle("session_start", { reason: "new" }, ctxFor("s2"));
 
     expect((await mock.executeTool("TaskList", {})).content[0].text).toBe("No tasks found");
   });
@@ -92,10 +96,10 @@ describe("taskScope: memory", () => {
   it("keeps tasks across a reload", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
-    await mock.fireLifecycle("session_start", { reason: "startup" }, mockSessionCtx("s1"));
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxFor("s1"));
     await mock.executeTool("TaskCreate", { subject: "Ephemeral", description: "d" });
 
-    await mock.fireLifecycle("session_start", { reason: "reload" }, mockSessionCtx("s1"));
+    await mock.fireLifecycle("session_start", { reason: "reload" }, ctxFor("s1"));
 
     expect((await mock.executeTool("TaskList", {})).content[0].text).toContain("Ephemeral");
   });
@@ -107,7 +111,7 @@ describe("taskScope: session, without a persisted session", () => {
   it("keeps tasks in memory and leaves nothing on disk", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
-    await mock.fireLifecycle("session_start", { reason: "startup" }, mockSessionCtx("s1", { persisted: false }));
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxFor("s1", { persisted: false }));
     await mock.executeTool("TaskCreate", { subject: "Ephemeral", description: "d" });
 
     expect(existsSync(join(cwd, ".pi"))).toBe(false);
@@ -117,7 +121,7 @@ describe("taskScope: session, without a persisted session", () => {
   it("still writes a session file when the session is persisted", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
-    await mock.fireLifecycle("session_start", { reason: "startup" }, mockSessionCtx("s1"));
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxFor("s1"));
     await mock.executeTool("TaskCreate", { subject: "Durable", description: "d" });
 
     expect(existsSync(sessionFile("s1"))).toBe(true);
@@ -126,7 +130,7 @@ describe("taskScope: session, without a persisted session", () => {
   it("does not fall back to a file when a later lifecycle event fires", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
-    const ctx = mockSessionCtx("s1", { persisted: false });
+    const ctx = ctxFor("s1", { persisted: false });
     await mock.fireLifecycle("session_start", { reason: "startup" }, ctx);
     await mock.fireLifecycle("before_agent_start", {}, ctx);
     await mock.fireLifecycle("turn_start", {}, ctx);
@@ -137,12 +141,13 @@ describe("taskScope: session, without a persisted session", () => {
 });
 
 describe("PI_TASKS override", () => {
-  it("resolves a relative path against the working directory", async () => {
+  it("resolves a relative path against the session workspace", async () => {
     process.env.PI_TASKS = "./custom/list.json";
     config.current = { taskScope: "memory" }; // overridden by the env var
 
     const mock = mockPi();
     initExtension(mock.pi as any);
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxFor("s1"));
     await mock.executeTool("TaskCreate", { subject: "Relative", description: "d" });
 
     const file = join(cwd, "custom", "list.json");
@@ -178,7 +183,7 @@ describe("session_start with a persisted list", () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
 
-    const ctx = mockSessionCtx("s1");
+    const ctx = ctxFor("s1");
     await mock.fireLifecycle("session_start", { reason: "startup" }, ctx);
 
     expect(existsSync(sessionFile("s1"))).toBe(false);
@@ -190,7 +195,7 @@ describe("session_start with a persisted list", () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
 
-    const ctx = mockSessionCtx("s1");
+    const ctx = ctxFor("s1");
     await mock.fireLifecycle("session_start", { reason: "resume" }, ctx);
 
     expect(existsSync(sessionFile("s1"))).toBe(true);
@@ -204,7 +209,7 @@ describe("session_start with a persisted list", () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
 
-    const ctx = mockSessionCtx("s1");
+    const ctx = ctxFor("s1");
     await mock.fireLifecycle("session_start", { reason: "startup" }, ctx);
 
     expect(existsSync(sessionFile("s1"))).toBe(true);

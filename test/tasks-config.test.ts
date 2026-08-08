@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadTasksConfig, saveTasksConfig } from "../src/tasks-config.js";
+import { loadGlobalTasksConfig, loadTasksConfig, saveTasksConfig } from "../src/tasks-config.js";
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -37,6 +37,7 @@ describe("tasks config", () => {
   it("loads global defaults from the agent directory", () => {
     writeJson(globalConfigPath, { autoCascade: true, maxVisible: 20 });
 
+    expect(loadGlobalTasksConfig(agentDir)).toEqual({ autoCascade: true, maxVisible: 20 });
     expect(loadTasksConfig(cwd, agentDir)).toEqual({ autoCascade: true, maxVisible: 20 });
   });
 

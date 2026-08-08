@@ -14,6 +14,7 @@ import { mockPi } from "./helpers/mock-pi.js";
 
 const config = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 vi.mock("../src/tasks-config.js", () => ({
+  loadGlobalTasksConfig: () => ({ ...config.current }),
   loadTasksConfig: () => ({ ...config.current }),
   saveTasksConfig: () => {},
 }));

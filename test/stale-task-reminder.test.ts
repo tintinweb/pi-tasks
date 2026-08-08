@@ -6,6 +6,7 @@ afterEach(() => { delete process.env.PI_TASKS; });
 
 function mockCtx() {
   return {
+    cwd: process.cwd(),
     model: { id: "test-model", name: "Test" },
     modelRegistry: {},
     ui: {
@@ -50,6 +51,7 @@ function mockPi() {
     async executeTool(name: string, params: any, ctx = mockCtx()) {
       const tool = tools.get(name);
       if (!tool) throw new Error(`Tool ${name} not registered`);
+      await this.fireLifecycle("tool_execution_start", { toolName: name }, ctx);
       const result = await tool.execute("call-1", params, undefined, undefined, ctx);
       await this.fireLifecycle("tool_result", { toolName: name });
       return result;
@@ -57,7 +59,10 @@ function mockPi() {
     async runCommand(name: string, ui: any) {
       const cmd = commands.get(name);
       if (!cmd) throw new Error(`Command ${name} not registered`);
-      return cmd.handler("", { ui });
+      // ExtensionCommandContext extends ExtensionContext: it carries cwd and the same
+      // ui surface, plus the prompt helpers the command drives.
+      const ctx = mockCtx();
+      return cmd.handler("", { ...ctx, ui: { ...ctx.ui, ...ui } });
     },
     async fireLifecycle(event: string, ...args: any[]) {
       let lastResult: any;

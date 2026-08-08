@@ -3,7 +3,7 @@
  * auto-cascade, and widget agent ID display.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ import { installSubagentsMock, type MockEventBus, mockCtx, mockPi, mockSessionCt
 // developer's global <agentDir>/tasks-config.json leak into the results.
 const config = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
 vi.mock("../src/tasks-config.js", () => ({
+  loadGlobalTasksConfig: () => ({ ...config.current }),
   loadTasksConfig: () => ({ ...config.current }),
   saveTasksConfig: () => {},
 }));
@@ -30,27 +31,29 @@ beforeEach(() => {
 afterEach(() => { delete process.env.PI_TASKS; });
 
 describe("Session task rehydration", () => {
-  // Session-scoped stores resolve against the working directory. Point that at a
-  // temp directory: .pi/ in the real one holds the developer's own task list.
+  // Task paths resolve against the session workspace (ctx.cwd), so every test gets
+  // its own: .pi/ in the real working directory holds the developer's own task list.
   let cwd: string;
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), "pi-tasks-session-"));
-    vi.spyOn(process, "cwd").mockReturnValue(cwd);
   });
   afterEach(() => {
     vi.restoreAllMocks();
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  const sessionCtx = (sessionId: string) => mockSessionCtx(sessionId, { cwd });
+  const sessionFile = (sessionId: string) => join(cwd, ".pi", "tasks", `tasks-${sessionId}.json`);
+
   it("renders default session-scoped tasks immediately after reload", async () => {
     const sessionId = `reload-${process.pid}-${Date.now()}`;
-    const taskFile = join(process.cwd(), ".pi", "tasks", `tasks-${sessionId}.json`);
+    const taskFile = sessionFile(sessionId);
     try {
       new TaskStore(taskFile).create("Review the rerun", "Inspect final results");
       delete process.env.PI_TASKS;
       const mock = mockPi();
       initExtension(mock.pi as any);
-      const ctx = mockSessionCtx(sessionId);
+      const ctx = sessionCtx(sessionId);
 
       await mock.fireLifecycle("session_start", { reason: "reload" }, ctx);
 
@@ -71,7 +74,7 @@ describe("Session task rehydration", () => {
       process.env.PI_TASKS = taskFile;
       const mock = mockPi();
       initExtension(mock.pi as any);
-      const ctx = mockCtx();
+      const ctx = mockCtx(cwd);
 
       await mock.fireLifecycle("session_start", { reason: "reload" }, ctx);
 
@@ -85,13 +88,13 @@ describe("Session task rehydration", () => {
 
   it("renders persisted tasks after /resume", async () => {
     const sessionId = `resume-${process.pid}-${Date.now()}`;
-    const taskFile = join(process.cwd(), ".pi", "tasks", `tasks-${sessionId}.json`);
+    const taskFile = sessionFile(sessionId);
     try {
       new TaskStore(taskFile).create("Resume this", "Pick up where we left off");
       delete process.env.PI_TASKS;
       const mock = mockPi();
       initExtension(mock.pi as any);
-      const ctx = mockSessionCtx(sessionId);
+      const ctx = sessionCtx(sessionId);
 
       await mock.fireLifecycle("session_start", { reason: "resume" }, ctx);
 
@@ -106,8 +109,8 @@ describe("Session task rehydration", () => {
   it("switches the session-scoped store to the new session on /new", async () => {
     const sessionA = `switch-a-${process.pid}-${Date.now()}`;
     const sessionB = `switch-b-${process.pid}-${Date.now()}`;
-    const fileA = join(process.cwd(), ".pi", "tasks", `tasks-${sessionA}.json`);
-    const fileB = join(process.cwd(), ".pi", "tasks", `tasks-${sessionB}.json`);
+    const fileA = sessionFile(sessionA);
+    const fileB = sessionFile(sessionB);
     try {
       new TaskStore(fileA).create("Task in A", "desc");
       new TaskStore(fileB).create("Task in B", "desc");
@@ -115,15 +118,13 @@ describe("Session task rehydration", () => {
       const mock = mockPi();
       initExtension(mock.pi as any);
 
-      const ctxA = mockSessionCtx(sessionA);
+      const ctxA = sessionCtx(sessionA);
       await mock.fireLifecycle("session_start", { reason: "startup" }, ctxA);
       expect(ctxA.sessionManager.getSessionId).toHaveBeenCalledOnce();
 
-      // /new must reset storeUpgraded and re-point at the new session file —
-      // previously handled by the (never-emitted) session_switch event. Without
-      // that reset, storeUpgraded stays true and getSessionId is never called
-      // again, leaving the store stuck on session A.
-      const ctxB = mockSessionCtx(sessionB);
+      // /new must re-point at the new session file. This was previously handled
+      // by the never-emitted session_switch event, leaving the store on session A.
+      const ctxB = sessionCtx(sessionB);
       await mock.fireLifecycle("session_start", { reason: "new" }, ctxB);
       expect(ctxB.sessionManager.getSessionId).toHaveBeenCalledOnce();
     } finally {
@@ -135,21 +136,21 @@ describe("Session task rehydration", () => {
   it("seeds a forked session with an independent copy of the parent's tasks", async () => {
     const parent = `fork-parent-${process.pid}-${Date.now()}`;
     const child = `fork-child-${process.pid}-${Date.now()}`;
-    const parentFile = join(process.cwd(), ".pi", "tasks", `tasks-${parent}.json`);
-    const childFile = join(process.cwd(), ".pi", "tasks", `tasks-${child}.json`);
+    const parentFile = sessionFile(parent);
+    const childFile = sessionFile(child);
     try {
       new TaskStore(parentFile).create("Inherited task", "carry me into the fork");
       delete process.env.PI_TASKS;
       const mock = mockPi();
       initExtension(mock.pi as any);
 
-      const ctxP = mockSessionCtx(parent);
+      const ctxP = sessionCtx(parent);
       await mock.fireLifecycle("session_start", { reason: "startup" }, ctxP);
 
       // /fork re-points to a brand-new (empty) session file. Without seeding, the
       // fork would silently lose the parent's tasks; with it, the fork gets an
       // independent copy that does not write back to the parent.
-      const ctxC = mockSessionCtx(child);
+      const ctxC = sessionCtx(child);
       await mock.fireLifecycle("session_start", { reason: "fork" }, ctxC);
 
       const forked = new TaskStore(childFile).list();
@@ -162,6 +163,112 @@ describe("Session task rehydration", () => {
       rmSync(parentFile, { force: true });
       rmSync(childFile, { force: true });
     }
+  });
+});
+
+describe("Workspace-scoped store resolution", () => {
+  // Paths come from ExtensionContext.cwd, not process.cwd(). The two match in the
+  // terminal host, but a long-lived host serving sessions from another directory
+  // would otherwise write every workspace's tasks into its own.
+  const workspaces: string[] = [];
+  const workspace = (label: string) => {
+    const dir = mkdtempSync(join(tmpdir(), `pi-tasks-${label}-`));
+    workspaces.push(dir);
+    return dir;
+  };
+
+  afterEach(() => {
+    for (const dir of workspaces.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("stores session tasks under ctx.cwd instead of the host process cwd", async () => {
+    const cwd = workspace("workspace");
+    const sessionId = `ctx-cwd-${process.pid}-${Date.now()}`;
+    const taskFile = join(cwd, ".pi", "tasks", `tasks-${sessionId}.json`);
+    const hostTaskFile = join(process.cwd(), ".pi", "tasks", `tasks-${sessionId}.json`);
+    delete process.env.PI_TASKS;
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctx = mockSessionCtx(sessionId, { cwd });
+
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctx);
+    await mock.executeTool("TaskCreate", {
+      subject: "Workspace task",
+      description: "Must use the session workspace",
+    }, ctx);
+
+    expect(new TaskStore(taskFile).list().map(t => t.subject)).toEqual(["Workspace task"]);
+    expect(existsSync(hostTaskFile)).toBe(false);
+  });
+
+  it("loads project scope from ctx.cwd and stores the shared task list there", async () => {
+    const cwd = workspace("project-scope");
+    config.current = { taskScope: "project" };
+    delete process.env.PI_TASKS;
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctx = mockCtx(cwd);
+
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctx);
+    await mock.executeTool("TaskCreate", {
+      subject: "Shared workspace task",
+      description: "Must use the project-scoped store",
+    }, ctx);
+
+    const taskFile = join(cwd, ".pi", "tasks", "tasks.json");
+    expect(new TaskStore(taskFile).list().map(t => t.subject)).toEqual(["Shared workspace task"]);
+  });
+
+  it("resolves relative PI_TASKS paths from ctx.cwd", async () => {
+    const cwd = workspace("relative");
+    process.env.PI_TASKS = "./state/tasks.json";
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctx = mockCtx(cwd);
+
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctx);
+    await mock.executeTool("TaskCreate", {
+      subject: "Relative override task",
+      description: "Must resolve relative to the session workspace",
+    }, ctx);
+
+    const taskFile = join(cwd, "state", "tasks.json");
+    expect(new TaskStore(taskFile).list().map(t => t.subject)).toEqual(["Relative override task"]);
+  });
+
+  it("switches session stores when the session ID changes in the same workspace", async () => {
+    const cwd = workspace("session-switch");
+    const sessionA = `same-cwd-a-${process.pid}-${Date.now()}`;
+    const sessionB = `same-cwd-b-${process.pid}-${Date.now()}`;
+    delete process.env.PI_TASKS;
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+    const ctxA = mockSessionCtx(sessionA, { cwd });
+    const ctxB = mockSessionCtx(sessionB, { cwd });
+
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxA);
+    await mock.executeTool("TaskCreate", { subject: "Task A", description: "Session A" }, ctxA);
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxB);
+    await mock.executeTool("TaskCreate", { subject: "Task B", description: "Session B" }, ctxB);
+
+    const file = (id: string) => join(cwd, ".pi", "tasks", `tasks-${id}.json`);
+    expect(new TaskStore(file(sessionA)).list().map(t => t.subject)).toEqual(["Task A"]);
+    expect(new TaskStore(file(sessionB)).list().map(t => t.subject)).toEqual(["Task B"]);
+  });
+
+  it("keeps an in-memory store when the context cwd changes", async () => {
+    const ctxA = mockCtx(workspace("memory-a"));
+    const ctxB = mockCtx(workspace("memory-b"));
+    process.env.PI_TASKS = "off";
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("session_start", { reason: "startup" }, ctxA);
+    await mock.executeTool("TaskCreate", { subject: "Memory task", description: "Keep me" }, ctxA);
+    await mock.fireLifecycle("turn_start", {}, ctxB);
+
+    const result = await mock.executeTool("TaskList", {}, ctxB);
+    expect(result.content[0].text).toContain("Memory task");
   });
 });
 

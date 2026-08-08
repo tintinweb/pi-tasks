@@ -24,15 +24,19 @@ function readTasksConfig(configPath: string): TasksConfig {
   }
 }
 
-export function loadTasksConfig(cwd = process.cwd(), agentDir = getAgentDir()): TasksConfig {
-  const globalConfig = readTasksConfig(join(agentDir, "tasks-config.json"));
+export function loadGlobalTasksConfig(agentDir = getAgentDir()): TasksConfig {
+  return readTasksConfig(join(agentDir, "tasks-config.json"));
+}
+
+export function loadTasksConfig(cwd: string, agentDir = getAgentDir()): TasksConfig {
+  const globalConfig = loadGlobalTasksConfig(agentDir);
   const projectConfig = readTasksConfig(join(cwd, ".pi", "tasks-config.json"));
   return { ...globalConfig, ...projectConfig };
 }
 
-export function saveTasksConfig(config: TasksConfig, cwd = process.cwd(), agentDir = getAgentDir()): void {
+export function saveTasksConfig(config: TasksConfig, cwd: string, agentDir = getAgentDir()): void {
   const configPath = join(cwd, ".pi", "tasks-config.json");
-  const globalConfig = readTasksConfig(join(agentDir, "tasks-config.json"));
+  const globalConfig = loadGlobalTasksConfig(agentDir);
   const projectOverrides = Object.fromEntries(Object.entries(config).filter(([key, value]) => globalConfig[key as keyof TasksConfig] !== value));
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, JSON.stringify(projectOverrides, null, 2));

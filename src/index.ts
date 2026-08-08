@@ -29,7 +29,7 @@ import {
   resetCadenceState,
 } from "./reminder-cadence.js";
 import { TaskStore } from "./task-store.js";
-import { loadTasksConfig } from "./tasks-config.js";
+import { loadGlobalTasksConfig, loadTasksConfig } from "./tasks-config.js";
 import type { Task } from "./types.js";
 import { openSettingsMenu } from "./ui/settings-menu.js";
 import { TaskWidget, type UICtx } from "./ui/task-widget.js";
@@ -125,28 +125,38 @@ function buildSystemReminder(tasks: Task[]): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  // Initialize store and config
-  const cfg = loadTasksConfig();
+  // Project overrides require ExtensionContext.cwd, which is unavailable while
+  // the extension factory runs. Start with global defaults, then merge the
+  // active workspace's overrides on the first context-bearing event.
+  const cfg = loadGlobalTasksConfig();
   const piTasks = process.env.PI_TASKS;
-  const taskScope = cfg.taskScope ?? "session";
+  let taskScope = cfg.taskScope ?? "session";
 
-  /** Resolve the task store path from env/config (without session ID). */
-  function resolveStorePath(sessionId?: string): string | undefined {
-    if (piTasks === "off") return undefined;
-    if (piTasks?.startsWith("/")) return piTasks;
-    if (piTasks?.startsWith(".")) return resolve(piTasks);
-    if (piTasks) return piTasks;
-    if (taskScope === "memory") return undefined;
-    if (taskScope === "session" && sessionId) {
-      return join(process.cwd(), ".pi", "tasks", `tasks-${sessionId}.json`);
+  /** Resolve both the backing path and a stable identity for the active store. */
+  function resolveStoreTarget(cwd?: string, sessionId?: string): { key: string; path?: string } {
+    if (piTasks === "off") return { key: "memory:env" };
+    if (piTasks?.startsWith("/")) return { key: `path:${piTasks}`, path: piTasks };
+    if (piTasks?.startsWith(".")) {
+      const path = cwd ? resolve(cwd, piTasks) : undefined;
+      return path ? { key: `path:${path}`, path } : { key: "pending:relative" };
     }
-    if (taskScope === "session") return undefined; // no session ID yet, start in-memory
-    return join(process.cwd(), ".pi", "tasks", "tasks.json");
+    if (piTasks) return { key: `named:${piTasks}`, path: piTasks };
+    if (taskScope === "memory") return { key: "memory:config" };
+    if (!cwd) return { key: "pending:workspace" };
+    if (taskScope === "session" && sessionId) {
+      const path = join(cwd, ".pi", "tasks", `tasks-${sessionId}.json`);
+      return { key: `path:${path}`, path };
+    }
+    if (taskScope === "session") return { key: "pending:session" };
+    const path = join(cwd, ".pi", "tasks", "tasks.json");
+    return { key: `path:${path}`, path };
   }
 
-  // For project scope (or env override), create store immediately.
-  // For session scope, start with in-memory and upgrade once we have the session ID.
-  let store = new TaskStore(resolveStorePath());
+  // Project and relative paths need ExtensionContext.cwd, which is unavailable
+  // while the extension factory runs. Absolute and named PI_TASKS overrides can
+  // still be opened immediately; all other stores start in memory.
+  let storeTarget = resolveStoreTarget();
+  let store = new TaskStore(storeTarget.path);
   const tracker = new ProcessTracker();
   const widget = new TaskWidget(store, cfg);
 
@@ -333,26 +343,40 @@ export default function (pi: ExtensionAPI) {
     widget.update();
   });
 
-  // ── Session-scoped store upgrade ──
-  // For session scope, the store starts in-memory (no session ID at init time).
-  // Upgrade to file-backed on first context arrival (turn_start, before_agent_start,
-  // or tool_execution_start — whichever fires first).
-  let storeUpgraded = false;
+  // ── Context-scoped store initialization ──
+  // Project paths cannot be resolved until an ExtensionContext is available.
+  // Initialize on the first context-bearing event and reinitialize when a host
+  // switches this extension instance to a session in another workspace.
+  let configuredCwd: string | undefined;
   let persistedTasksShown = false;
   let agentsReattached = false;
-  function upgradeStoreIfNeeded(ctx: ExtensionContext) {
-    if (storeUpgraded) return;
-    if (taskScope === "session" && !piTasks) {
-      // `pi --no-session` mints a session ID but never a session file. Keying off the
-      // ID alone would write tasks-<id>.json for a session that can never be resumed
-      // and is orphaned the moment pi exits: if pi is not persisting the conversation,
-      // don't persist the task list either.
-      const sessionId = ctx.sessionManager.getSessionFile() ? ctx.sessionManager.getSessionId() : undefined;
-      const path = sessionId ? resolveStorePath(sessionId) : undefined;
-      store = new TaskStore(path);
-      widget.setStore(store);
+  function initializeStoreForContext(ctx: ExtensionContext, reloadConfig = false) {
+    // Keep the config object identity stable because the widget and auto-clear
+    // manager retain references to it, but replace every value so overrides
+    // from a previous workspace cannot leak into the next one.
+    if (reloadConfig || configuredCwd !== ctx.cwd) {
+      for (const key of Object.keys(cfg) as (keyof typeof cfg)[]) delete cfg[key];
+      Object.assign(cfg, loadTasksConfig(ctx.cwd));
+      taskScope = cfg.taskScope ?? "session";
     }
-    storeUpgraded = true;
+
+    // `pi --no-session` mints a session ID but never a session file. Keying off the
+    // ID alone would write tasks-<id>.json for a session that can never be resumed
+    // and is orphaned the moment pi exits: if pi is not persisting the conversation,
+    // don't persist the task list either.
+    const sessionId = taskScope === "session" && !piTasks && ctx.sessionManager.getSessionFile()
+      ? ctx.sessionManager.getSessionId()
+      : undefined;
+    const nextTarget = resolveStoreTarget(ctx.cwd, sessionId);
+    if (nextTarget.key !== storeTarget.key) {
+      store = new TaskStore(nextTarget.path);
+      widget.setStore(store);
+      storeTarget = nextTarget;
+      // The new store owns a different task list, so the agent map has to be
+      // rebuilt from it rather than kept from the previous one.
+      agentsReattached = false;
+    }
+    configuredCwd = ctx.cwd;
   }
 
   /** Re-link persisted in-progress tasks to the subagents still running for them.
@@ -406,7 +430,7 @@ export default function (pi: ExtensionAPI) {
     onTurnStart(cadence);
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
-    upgradeStoreIfNeeded(ctx);
+    initializeStoreForContext(ctx);
     if (autoClear.onTurnStart(cadence.currentTurn)) widget.update();
   });
 
@@ -501,7 +525,6 @@ export default function (pi: ExtensionAPI) {
     // copy. Snapshot before the store re-points to the new (empty) session file.
     const forkSeed = reason === "fork" ? store.snapshot() : undefined;
     if (isSwitch) {
-      storeUpgraded = false;
       persistedTasksShown = false;
       agentsReattached = false;
       // Task IDs restart at 1 in every session, so a mapping held over from the
@@ -516,7 +539,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    upgradeStoreIfNeeded(ctx); // re-points a session store once storeUpgraded is cleared
+    initializeStoreForContext(ctx, true);
     if (forkSeed?.tasks.length) store.seed(forkSeed); // carry the parent's tasks into the fork
     reattachAgents(); // subagents outlive a reload; relink them before events arrive
     // resume/reload/fork keep tasks; startup/new auto-clear an all-completed list.
@@ -533,7 +556,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (_event, ctx) => {
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
-    upgradeStoreIfNeeded(ctx);
+    initializeStoreForContext(ctx);
     reattachAgents();
     showPersistedTasks();
     if (pendingWarning) {
@@ -546,7 +569,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_execution_start", async (_event, ctx) => {
     latestCtx = ctx;
     widget.setUICtx(ctx.ui as UICtx);
-    upgradeStoreIfNeeded(ctx);
+    initializeStoreForContext(ctx);
     widget.update();
   });
 
@@ -1140,6 +1163,9 @@ Set up task dependencies:
   pi.registerCommand("tasks", {
     description: "Manage tasks — view, create, clear completed",
     handler: async (_args: string, ctx: ExtensionCommandContext) => {
+      latestCtx = ctx;
+      widget.setUICtx(ctx.ui as UICtx);
+      initializeStoreForContext(ctx);
       const ui = ctx.ui;
 
       const mainMenu = async (): Promise<void> => {
@@ -1245,7 +1271,7 @@ Set up task dependencies:
       };
 
       const settingsMenu = (): Promise<void> =>
-        openSettingsMenu(ui, cfg, mainMenu, AUTO_CLEAR_DELAY);
+        openSettingsMenu(ui, cfg, mainMenu, AUTO_CLEAR_DELAY, ctx.cwd);
 
       const createTask = async (): Promise<void> => {
         const subject = await ui.input("Task subject");
