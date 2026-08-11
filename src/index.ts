@@ -119,7 +119,7 @@ function buildSystemReminder(tasks: Task[]): string {
     "<system-reminder>",
     header,
     "",
-    `${JSON.stringify(items)}.${overflow} Continue on with the tasks at hand if applicable.`,
+    `${JSON.stringify(items)}.${overflow} Answer the user's latest message first if it needs a response. Then continue working through the unfinished tasks in this same run. Do not stop merely because the user's question has been answered.`,
     "</system-reminder>",
   ].join("\n");
 }
@@ -377,6 +377,36 @@ export default function (pi: ExtensionAPI) {
     taskToolNames: TASK_TOOL_NAMES,
   };
 
+  // A user may steer the agent with a question while it is executing a task
+  // list. Once that question is answered, Pi would normally settle and wait
+  // for more input. Remember the interruption so agent_settled can enqueue one
+  // continuation turn when unfinished tasks still exist.
+  let continueAfterUserMessage = false;
+
+  function explicitlyPausesTaskWork(text: string): boolean {
+    const normalized = text.trim().toLowerCase();
+    return /^(?:please[\s,:-]+)?(?:stop|pause|cancel|halt|wait)(?:\s|[.!?,]|$)/.test(normalized)
+      || /^(?:пожалуйста[\s,:-]+)?(?:остановись|останови|пауза|отмени|не продолжай|подожди|хватит)(?:\s|[.!?,]|$)/.test(normalized);
+  }
+
+  pi.on("input", async (event, ctx) => {
+    if (event.source === "extension") return { action: "continue" as const };
+
+    upgradeStoreIfNeeded(ctx);
+    const hasUnfinishedTasks = store.list().some(task => task.status !== "completed");
+    if (!hasUnfinishedTasks || explicitlyPausesTaskWork(event.text)) {
+      continueAfterUserMessage = false;
+      return { action: "continue" as const };
+    }
+
+    continueAfterUserMessage = true;
+    // Make the current response aware of the unfinished list immediately,
+    // rather than waiting for the normal multi-turn reminder cadence.
+    cadence.reminderDue = true;
+    cadence.reminderInjectedThisCycle = false;
+    return { action: "continue" as const };
+  });
+
   pi.on("turn_start", async (_event, ctx) => {
     onTurnStart(cadence);
     latestCtx = ctx;
@@ -461,6 +491,25 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (!continueAfterUserMessage || !ctx.isIdle()) return;
+
+    const unfinishedCount = store.list().filter(task => task.status !== "completed").length;
+    continueAfterUserMessage = false;
+    if (unfinishedCount === 0) return;
+
+    pi.sendMessage({
+      customType: "task-continuation",
+      content: [
+        "<system-reminder>",
+        `The user's latest message has been answered, but ${unfinishedCount} task${unfinishedCount === 1 ? " remains" : "s remain"} unfinished.`,
+        "Resume the task list now. Use TaskList to select the next actionable task, keep task statuses current, and continue until the remaining work is complete or genuinely blocked. Do not merely report that tasks remain.",
+        "</system-reminder>",
+      ].join("\n"),
+      display: false,
+    }, { deliverAs: "followUp", triggerTurn: true });
+  });
+
   // session_start replaces the never-emitted session_switch event. Rehydrating
   // here matters because before_agent_start only fires once the user prompts.
   pi.on("session_start", async (event, ctx) => {
@@ -478,6 +527,7 @@ export default function (pi: ExtensionAPI) {
     if (isSwitch) {
       storeUpgraded = false;
       persistedTasksShown = false;
+      continueAfterUserMessage = false;
       resetCadenceState(cadence);
       autoClear.reset();
       // Memory mode has no file to switch — clear tasks explicitly on /new.
