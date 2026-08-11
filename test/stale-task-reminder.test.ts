@@ -93,7 +93,8 @@ describe("stale in_progress task reminders", () => {
     expect(reminder).toContain("latest contents of your task list");
     expect(reminder).toContain('"content":"Finish stale reminder test"');
     expect(reminder).toContain('"status":"in_progress"');
-    expect(reminder).toContain("Continue on with the tasks at hand");
+    expect(reminder).toContain("continue working through the unfinished tasks in this same run");
+    expect(reminder).toContain("Do not stop merely because the user's question has been answered");
 
     unping();
   });
