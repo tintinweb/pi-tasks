@@ -114,70 +114,24 @@ describe("auto-clear: on_list_complete mode", () => {
     expect(store.list()).toHaveLength(2);
   });
 
-  it("does not clear immediately when all tasks complete", () => {
+  it("clears the whole list immediately when the final task completes", () => {
     store.create("A", "Desc");
     store.create("B", "Desc");
     store.update("1", { status: "completed" });
-    store.update("2", { status: "completed" });
-    manager.trackCompletion("2", 1);
-
-    // Turns 2-4: not enough
-    for (let turn = 2; turn <= 4; turn++) {
-      manager.onTurnStart(turn);
-    }
+    manager.trackCompletion("1", 1);
     expect(store.list()).toHaveLength(2);
-  });
 
-  it("clears all completed tasks after REMINDER_INTERVAL turns when all are completed", () => {
-    store.create("A", "Desc");
-    store.create("B", "Desc");
-    store.update("1", { status: "completed" });
     store.update("2", { status: "completed" });
-    manager.trackCompletion("2", 1);
+    manager.trackCompletion("2", 2);
 
-    manager.onTurnStart(5);
     expect(store.list()).toHaveLength(0);
   });
 
-  it("resets countdown when a new task is created before REMINDER_INTERVAL", () => {
-    store.create("A", "Desc");
-    store.update("1", { status: "completed" });
-    manager.trackCompletion("1", 1);
+  it("does not create or clear anything for an empty list", () => {
+    manager.trackCompletion("missing", 1);
 
-    // Turn 3: new task created — reset countdown
-    manager.onTurnStart(3);
-    manager.resetBatchCountdown();
-    store.create("B", "Desc");
-
-    // Turn 5 would have cleared, but countdown was reset at turn 3
-    manager.onTurnStart(5);
-    expect(store.get("1")).toBeDefined(); // still around — list isn't all completed
-  });
-
-  it("resets countdown when a task goes back to in_progress", () => {
-    store.create("A", "Desc");
-    store.create("B", "Desc");
-    store.update("1", { status: "completed" });
-    store.update("2", { status: "completed" });
-    manager.trackCompletion("2", 1);
-
-    // Turn 3: task 2 goes back to in_progress
-    manager.onTurnStart(3);
-    store.update("2", { status: "in_progress" });
-    manager.resetBatchCountdown();
-
-    // Turn 5: would have cleared, but countdown was reset
-    manager.onTurnStart(5);
-    expect(store.list()).toHaveLength(2); // both still here
-  });
-
-  it("returns true when tasks are cleared", () => {
-    store.create("Task", "Desc");
-    store.update("1", { status: "completed" });
-    manager.trackCompletion("1", 1);
-
-    expect(manager.onTurnStart(4)).toBe(false);
-    expect(manager.onTurnStart(5)).toBe(true);
+    expect(store.list()).toHaveLength(0);
+    expect(manager.onTurnStart(10)).toBe(false);
   });
 });
 
@@ -284,22 +238,6 @@ describe("auto-clear: reset (new session)", () => {
     manager.reset();
 
     // Old completion should NOT trigger after reset
-    manager.onTurnStart(5);
-    expect(store.get("1")).toBeDefined();
-  });
-
-  it("reset clears batch countdown so old all-completed state doesn't fire", () => {
-    const store = new TaskStore();
-    const manager = new AutoClearManager(() => store, () => "on_list_complete");
-
-    store.create("Task", "Desc");
-    store.update("1", { status: "completed" });
-    manager.trackCompletion("1", 1);
-
-    // Simulate /new — reset before the delay expires
-    manager.reset();
-
-    // Old batch countdown should NOT trigger after reset
     manager.onTurnStart(5);
     expect(store.get("1")).toBeDefined();
   });

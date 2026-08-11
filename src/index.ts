@@ -64,7 +64,7 @@ function intervalFor(tasks: Task[]): number {
   return tasks.some(t => t.status === "in_progress") ? ACTIVE_REMINDER_INTERVAL : REMINDER_INTERVAL;
 }
 
-/** How many turns completed tasks linger before auto-clearing. */
+/** How many turns individually completed tasks linger in on_task_complete mode. */
 const AUTO_CLEAR_DELAY = 4;
 
 /** Neutralize a task field for the echo: collapse newlines and strip reminder tags. */
@@ -327,7 +327,6 @@ export default function (pi: ExtensionAPI) {
     } else {
       // Actual error — revert to pending
       store.update(task.id, { status: "pending", metadata: { ...task.metadata, lastError: error || status } });
-      autoClear.resetBatchCountdown();
     }
     widget.setActiveTask(task.id, false);
     widget.update();
@@ -350,18 +349,20 @@ export default function (pi: ExtensionAPI) {
     storeUpgraded = true;
   }
 
-  /** Restore widget on session start/resume if there's unfinished work.
-   *  On new sessions, auto-clear if all tasks are completed (clean slate).
-   *  On resume, always show tasks (user may want to review).
-   *  Only runs once — the first caller wins. */
+  /** Restore the widget on session start/resume if there's unfinished work.
+   *  In on_list_complete mode, an all-completed persisted list is stale and
+   *  is cleared even on resume/reload. Other modes retain the old review
+   *  behavior on resume. Only runs once — the first caller wins. */
   function showPersistedTasks(isResume = false) {
     if (persistedTasksShown) return;
     persistedTasksShown = true;
     const tasks = store.list();
     if (tasks.length > 0) {
-      if (!isResume && tasks.every(t => t.status === "completed")) {
+      const allCompleted = tasks.every(t => t.status === "completed");
+      const immediateListCleanup = (cfg.autoClearCompleted ?? "on_list_complete") === "on_list_complete";
+      if (allCompleted && (!isResume || immediateListCleanup)) {
         store.clearCompleted();
-        if (taskScope === "session") store.deleteFileIfEmpty();
+        if (taskScope === "session" && !piTasks) store.deleteFileIfEmpty();
       } else {
         widget.update();
       }
@@ -580,7 +581,6 @@ All tasks are created with status \`pending\`.
     }),
 
     execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      autoClear.resetBatchCountdown();
       const meta = params.metadata ?? {};
       if (params.agentType) meta.agentType = params.agentType;
       const task = store.create(params.subject, params.description, params.activeForm, Object.keys(meta).length > 0 ? meta : undefined);
@@ -838,9 +838,6 @@ Set up task dependencies:
       // Update widget active task tracking
       if (fields.status === "in_progress") {
         widget.setActiveTask(taskId);
-        autoClear.resetBatchCountdown();
-      } else if (fields.status === "pending") {
-        autoClear.resetBatchCountdown();
       } else if (fields.status === "completed" || fields.status === "deleted") {
         widget.setActiveTask(taskId, false);
         if (fields.status === "completed") autoClear.trackCompletion(taskId, cadence.currentTurn);

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`on_list_complete` now clears synchronously** when the final task completes, rather than waiting for four future turns. This prevents a finished batch from accumulating indefinitely when new work starts before the delayed cleanup fires. Stale all-completed lists are also cleared on resume/reload in this mode.
+
 ## [0.7.2] - 2026-07-22
 
 ### Added

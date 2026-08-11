@@ -181,7 +181,7 @@ pending → in_progress → completed
                       → deleted (permanently removed)
 ```
 
-Tasks are created as `pending`. Mark `in_progress` before starting work, `completed` when done. `deleted` removes entirely — IDs never reset.
+Tasks are created as `pending`. Mark `in_progress` before starting work, `completed` when done. `deleted` removes entirely — IDs never reset. With the default `on_list_complete` cleanup mode, completing the final task immediately clears the whole tracker.
 
 ## Dependency Management
 
@@ -201,7 +201,7 @@ Task storage is controlled by the `taskScope` setting (`/tasks` → Settings →
 | `session` **(default)** | `<cwd>/.pi/tasks/tasks-<sessionId>.json` | Per-session file — isolated between sessions, survives resume |
 | `project` | `<cwd>/.pi/tasks/tasks.json` | Shared across all sessions in the project |
 
-On new session start, if all persisted tasks are completed they are auto-cleared for a clean slate. On session resume, all tasks (including completed) are shown so the user can review progress. Empty session files are automatically deleted when all tasks are cleared.
+On new session start, if all persisted tasks are completed they are auto-cleared for a clean slate. On session resume, unfinished work is restored; an all-completed list is also cleared when `on_list_complete` is active, while the other cleanup modes preserve it for review. Empty session files are automatically deleted when all tasks are cleared.
 
 ### Auto-clear completed tasks
 
@@ -210,10 +210,10 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 | Mode | Behaviour |
 |------|-----------|
 | `never` | Completed tasks stay visible until manually cleared via `/tasks` → Clear completed |
-| `on_list_complete` **(default)** | Cleared after all tasks are done and a few idle turns pass |
-| `on_task_complete` | Each completed task cleared individually after a few turns |
+| `on_list_complete` **(default)** | The whole tracker clears immediately when its final task completes |
+| `on_task_complete` | Each completed task clears individually after a few turns |
 
-Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
+The per-task mode uses a short turn-based delay so individual completions remain visible briefly. The default list mode clears synchronously, preventing a finished batch from being carried into the next batch.
 
 Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) changed through `/tasks` are saved as project overrides in `<cwd>/.pi/tasks-config.json`.
 

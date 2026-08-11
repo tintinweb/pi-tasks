@@ -3,7 +3,7 @@
  * auto-cascade, and widget agent ID display.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -152,6 +152,30 @@ describe("Session task rehydration", () => {
       expect(ctx.ui.setWidget).toHaveBeenCalledWith("tasks", expect.any(Function), {
         placement: "aboveEditor",
       });
+    } finally {
+      rmSync(taskFile, { force: true });
+    }
+  });
+
+  it("clears an all-completed list after /resume in on_list_complete mode", async () => {
+    const sessionId = `resume-completed-${process.pid}-${Date.now()}`;
+    const taskFile = join(process.cwd(), ".pi", "tasks", `tasks-${sessionId}.json`);
+    try {
+      const persisted = new TaskStore(taskFile);
+      persisted.create("Already done", "Should not be restored");
+      persisted.update("1", { status: "completed" });
+      delete process.env.PI_TASKS;
+      const mock = mockPi();
+      initExtension(mock.pi as any);
+      const ctx = {
+        ...mockCtx(),
+        sessionManager: { getSessionId: vi.fn(() => sessionId) },
+      };
+
+      await mock.fireLifecycle("session_start", { reason: "resume" }, ctx);
+
+      expect(new TaskStore(taskFile).list()).toHaveLength(0);
+      expect(existsSync(taskFile)).toBe(false);
     } finally {
       rmSync(taskFile, { force: true });
     }
@@ -465,6 +489,10 @@ describe("Completion listener", () => {
       description: "Desc",
       agentType: "general-purpose",
     });
+    await mock.executeTool("TaskCreate", {
+      subject: "Remaining task",
+      description: "Keeps the list open so the completed task can be inspected",
+    });
     await mock.executeTool("TaskExecute", { task_ids: ["1"] });
 
     // Simulate agent completion
@@ -472,6 +500,20 @@ describe("Completion listener", () => {
 
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("Status: completed");
+  });
+
+  it("clears the tracker when the final agent task completes", async () => {
+    await mock.executeTool("TaskCreate", {
+      subject: "Final agent task",
+      description: "Desc",
+      agentType: "general-purpose",
+    });
+    await mock.executeTool("TaskExecute", { task_ids: ["1"] });
+
+    mock.emitEvent("subagents:completed", { id: "agent-1" });
+
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).toBe("No tasks found");
   });
 
   it("reverts task to pending on subagents:failed event", async () => {
@@ -634,6 +676,15 @@ describe("Standalone operation (no subagents extension)", () => {
     await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
     const result = await mock.executeTool("TaskGet", { taskId: "1" });
     expect(result.content[0].text).toContain("in_progress");
+  });
+
+  it("clears the tracker when TaskUpdate completes the final task", async () => {
+    await mock.executeTool("TaskCreate", { subject: "Finish me", description: "desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "completed" });
+
+    const result = await mock.executeTool("TaskList", {});
+    expect(result.content[0].text).toBe("No tasks found");
   });
 
   it("TaskExecute gracefully refuses without subagents", async () => {
