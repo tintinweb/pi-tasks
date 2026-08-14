@@ -55,16 +55,28 @@ The extension renders a persistent widget above the editor:
 
 ### Widget display settings
 
-How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved as project overrides in `.pi/tasks-config.json`). All defaults preserve the original behaviour.
+Task display can be configured via `/tasks` → Settings (saved as project overrides in `.pi/tasks-config.json`). Defaults preserve the existing ID-ordered, expanded task list.
 
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
-| `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | `id` = creation order; `status` groups completed → in-progress → pending; `recent`/`oldest` = by last-updated time |
-| `maxVisible` | `5`–`100` | `10` | Caps how many task lines the widget shows (ignored when `showAll` is on) |
-| `showAll` | `true` / `false` | `false` | When `true`, every task is shown regardless of `maxVisible` |
-| `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortOrder: status` to keep active work visible and fold completed tasks away |
+| `collapseCompleted` | `true` / `false` | `false` | When enabled, collapses completed tasks to one count line and always shows every in-progress and pending task |
+| `sortOrder` | `id` / `status` / `recent` / `oldest` | `id` | `status` groups completed → in-progress → pending; `id` = creation order; `recent`/`oldest` = by last-updated time |
+| `maxVisible` | `5`–`100` | `10` | In expanded mode, caps task lines when `showAll` is off |
+| `showAll` | `true` / `false` | `false` | In expanded mode, shows every task regardless of `maxVisible` |
+| `hiddenAt` | `bottom` / `top` | `bottom` | In expanded mode, controls where the `… and N more` truncation occurs |
 
-> Note: the widget's `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`), which is the reverse of the `TaskList` tool's pending-first order.
+For custom ordering, an executable `tasks-config.cjs` can provide a comparator. Global configuration lives in the agent directory; project configuration lives at `.pi/tasks-config.cjs`:
+
+```js
+module.exports = {
+  sortOrder: (a, b) => {
+    const rank = { in_progress: 0, pending: 1, completed: 2 };
+    return rank[a.status] - rank[b.status] || Number(a.id) - Number(b.id);
+  },
+};
+```
+
+Executable configuration overrides JSON configuration at the same scope. Project configuration overrides global configuration.
 
 ## Tools
 
@@ -215,7 +227,7 @@ The `autoClearCompleted` setting controls automatic cleanup of completed tasks:
 
 Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger briefly so you see the completion before they disappear.
 
-Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) changed through `/tasks` are saved as project overrides in `<cwd>/.pi/tasks-config.json`.
+Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `collapseCompleted` / `sortOrder` / `maxVisible` / `showAll` / `hiddenAt`) changed through `/tasks` are saved as project overrides in `<cwd>/.pi/tasks-config.json`.
 
 ### Global defaults
 

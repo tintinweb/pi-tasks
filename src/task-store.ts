@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import type { Task, TaskStatus, TaskStoreData } from "./types.js";
+import type { Task, TaskSortOrder, TaskStatus, TaskStoreData } from "./types.js";
 
 function sortById(a: Task, b: Task): number {
   return Number(a.id) - Number(b.id);
@@ -177,9 +177,10 @@ export class TaskStore {
   }
 
   /** List all tasks, sorted by the given order (defaults to ID ascending). */
-  list(sortOrder: "id" | "status" | "recent" | "oldest" = "id"): Task[] {
+  list(sortOrder: TaskSortOrder = "id"): Task[] {
     if (this.filePath) this.load();
-    return Array.from(this.tasks.values()).sort(SORT_FNS[sortOrder]);
+    const compare = typeof sortOrder === "function" ? sortOrder : SORT_FNS[sortOrder];
+    return Array.from(this.tasks.values()).sort(compare);
   }
 
   update(id: string, fields: {

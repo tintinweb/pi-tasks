@@ -3,6 +3,9 @@
  */
 
 export type TaskStatus = "pending" | "in_progress" | "completed";
+export type BuiltInTaskSortOrder = "id" | "status" | "recent" | "oldest";
+export type TaskComparator = (a: Task, b: Task) => number;
+export type TaskSortOrder = BuiltInTaskSortOrder | TaskComparator;
 
 export interface Task {
   id: string;

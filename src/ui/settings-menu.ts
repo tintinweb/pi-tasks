@@ -50,11 +50,20 @@ export async function openSettingsMenu(
         values: ["on", "off"],
       },
       {
+        id: "collapseCompleted",
+        label: "Collapse completed tasks",
+        description:
+          "When ON, every in-progress and open task is shown and completed tasks become one count line. " +
+          "When OFF, completed tasks are listed individually and the visible limit applies.",
+        currentValue: (cfg.collapseCompleted ?? false) ? "on" : "off",
+        values: ["on", "off"],
+      },
+      {
         id: "showAll",
         label: "Show all tasks in widget",
         description:
-          "When ON, every task is shown regardless of the visible limit. " +
-          "When OFF, the list is capped by 'Max visible tasks'.",
+          "In expanded-completed mode, show every task regardless of the visible limit. " +
+          "Collapsed mode always shows every active task.",
         currentValue: (cfg.showAll ?? false) ? "on" : "off",
         values: ["on", "off"],
       },
@@ -62,7 +71,7 @@ export async function openSettingsMenu(
         id: "maxVisible",
         label: "Max visible tasks in widget",
         description:
-          "Only applies when 'Show all tasks' is OFF. " +
+          "Only applies when completed tasks are expanded and 'Show all tasks' is OFF. " +
           "Caps how many task lines the widget shows.",
         currentValue: String(cfg.maxVisible ?? 10),
         values: ["5", "10", "15", "20", "30", "50", "100"],
@@ -71,10 +80,12 @@ export async function openSettingsMenu(
         id: "sortOrder",
         label: "Widget sort order",
         description:
-          '"status" groups by completed → in-progress → pending. ' +
+          '"status" groups by in-progress → open → completed. ' +
           '"id" sorts by creation order.',
-        currentValue: cfg.sortOrder ?? "id",
-        values: ["id", "status", "recent", "oldest"],
+        currentValue: typeof cfg.sortOrder === "function" ? "custom" : (cfg.sortOrder ?? "id"),
+        values: typeof cfg.sortOrder === "function"
+          ? ["custom", "id", "status", "recent", "oldest"]
+          : ["id", "status", "recent", "oldest"],
       },
       {
         id: "hiddenAt",
@@ -115,6 +126,10 @@ export async function openSettingsMenu(
           cfg.autoClearCompleted = newValue as TasksConfig["autoClearCompleted"];
           saveTasksConfig(cfg);
         }
+        if (id === "collapseCompleted") {
+          cfg.collapseCompleted = newValue === "on";
+          saveTasksConfig(cfg);
+        }
         if (id === "showAll") {
           cfg.showAll = newValue === "on";
           saveTasksConfig(cfg);
@@ -123,7 +138,7 @@ export async function openSettingsMenu(
           cfg.maxVisible = Number(newValue);
           saveTasksConfig(cfg);
         }
-        if (id === "sortOrder") {
+        if (id === "sortOrder" && newValue !== "custom") {
           cfg.sortOrder = newValue as TasksConfig["sortOrder"];
           saveTasksConfig(cfg);
         }

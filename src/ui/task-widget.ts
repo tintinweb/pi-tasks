@@ -167,12 +167,16 @@ export class TaskWidget {
     const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
+    const collapseCompleted = this.config.collapseCompleted ?? false;
+    const displayTasks = collapseCompleted ? tasks.filter(task => task.status !== "completed") : tasks;
     const showAll = this.config.showAll ?? false;
     const limit = this.config.maxVisible ?? DEFAULT_MAX_VISIBLE_TASKS;
     const hiddenAt = this.config.hiddenAt ?? "bottom";
-    const visible = showAll ? tasks : TRUNCATE_FNS[hiddenAt](tasks, limit);
+    // Collapsed mode always keeps every actionable task visible. Expanded mode
+    // retains the configurable legacy truncation behavior.
+    const visible = collapseCompleted || showAll ? displayTasks : TRUNCATE_FNS[hiddenAt](displayTasks, limit);
 
-    const hiddenCount = tasks.length - visible.length;
+    const hiddenCount = displayTasks.length - visible.length;
     const overflowLine = hiddenCount > 0
       ? truncate(theme.fg("dim", `    … and ${hiddenCount} more`))
       : undefined;
@@ -237,6 +241,10 @@ export class TaskWidget {
 
     if (overflowLine && hiddenAt !== "top") {
       lines.push(overflowLine);
+    }
+    if (collapseCompleted && completed.length > 0) {
+      const label = completed.length === 1 ? "completed task" : "completed tasks";
+      lines.push(truncate(`  ${theme.fg("success", "✔")} ${theme.fg("dim", `${completed.length} ${label}`)}`));
     }
 
     return lines;
