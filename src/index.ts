@@ -863,7 +863,7 @@ Set up task dependencies:
     name: "TaskOutput",
     label: "TaskOutput",
     description: `- Retrieves output from a running or completed task (background shell, agent, or remote session)
-- Takes a task_id parameter identifying the task
+- Takes a task_id parameter that identifies the task
 - Returns the task output along with status information
 - Use block=true (default) to wait for task completion
 - Use block=false for non-blocking check of current status
