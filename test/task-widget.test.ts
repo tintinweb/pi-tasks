@@ -173,44 +173,67 @@ describe("TaskWidget", () => {
     expect(ui.state.widgets.get("tasks")?.content).toBeUndefined();
   });
 
-  it("limits visible tasks to MAX_VISIBLE_TASKS", () => {
-    for (let i = 0; i < 15; i++) {
-      store.create(`Task ${i + 1}`, "Desc");
-    }
+  it("shows the default window from the first unfinished task", () => {
+    for (let i = 1; i <= 15; i++) store.create(`Task ${i}`, "Desc");
+    for (let i = 1; i <= 3; i++) store.update(String(i), { status: "completed" });
     widget.update();
 
     const lines = renderWidget(ui.state);
-    // header + 10 tasks + "… and 5 more"
-    expect(lines).toHaveLength(12);
-    expect(lines[11]).toContain("5 more");
+    expect(lines).toHaveLength(13); // header + top overflow + 10 tasks + bottom overflow
+    expect(lines[1]).toContain("3 earlier");
+    expect(lines[2]).toContain("Task 4");
+    expect(lines[11]).toContain("Task 13");
+    expect(lines[12]).toContain("2 later");
+    expect(lines.some(l => l.includes("Task 3"))).toBe(false);
+    expect(lines.some(l => l.includes("Task 14"))).toBe(false);
   });
 
-  it("respects maxVisible config", () => {
+  it("respects maxVisible config for the unfinished-task window", () => {
     widget = new TaskWidget(store, { maxVisible: 5 });
     widget.setUICtx(ui.ctx);
-    for (let i = 0; i < 15; i++) {
-      store.create(`Task ${i + 1}`, "Desc");
-    }
+    for (let i = 1; i <= 12; i++) store.create(`Task ${i}`, "Desc");
+    for (let i = 1; i <= 4; i++) store.update(String(i), { status: "completed" });
     widget.update();
 
     const lines = renderWidget(ui.state);
-    // header + 5 tasks + "… and 10 more"
-    expect(lines).toHaveLength(7);
-    expect(lines[6]).toContain("10 more");
+    expect(lines).toHaveLength(8); // header + two overflow markers + 5 tasks
+    expect(lines[1]).toContain("4 earlier");
+    expect(lines[2]).toContain("Task 5");
+    expect(lines[6]).toContain("Task 9");
+    expect(lines[7]).toContain("3 later");
   });
 
-  it("shows all tasks when limit exceeds task count", () => {
+  it("shifts the window backward when the unfinished task is near the end", () => {
+    widget = new TaskWidget(store, { maxVisible: 5 });
+    widget.setUICtx(ui.ctx);
+    for (let i = 1; i <= 12; i++) store.create(`Task ${i}`, "Desc");
+    for (let i = 1; i <= 9; i++) store.update(String(i), { status: "completed" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines).toHaveLength(7); // header + earlier marker + 5 tasks
+    expect(lines[1]).toContain("7 earlier");
+    expect(lines[2]).toContain("Task 8");
+    expect(lines[6]).toContain("Task 12");
+    expect(lines.some(l => l.includes("Task 7"))).toBe(false);
+    expect(lines.some(l => l.includes("later"))).toBe(false);
+  });
+
+  it("shows every task when a mixed-status list fits within the limit", () => {
     widget = new TaskWidget(store, { maxVisible: 10 });
     widget.setUICtx(ui.ctx);
     for (let i = 0; i < 3; i++) {
       store.create(`Task ${i + 1}`, "Desc");
     }
+    store.update("1", { status: "completed" });
     widget.update();
 
     const lines = renderWidget(ui.state);
-    // header + 3 tasks, no overflow
     expect(lines).toHaveLength(4);
-    expect(lines[lines.length - 1]).not.toContain("more");
+    expect(lines[1]).toContain("Task 1");
+    expect(lines[3]).toContain("Task 3");
+    expect(lines.join("\n")).not.toContain("earlier");
+    expect(lines.join("\n")).not.toContain("later");
   });
 
   it("shows all tasks when showAll is true even with maxVisible set", () => {
@@ -222,54 +245,48 @@ describe("TaskWidget", () => {
     widget.update();
 
     const lines = renderWidget(ui.state);
-    // header + 15 tasks, no overflow line
     expect(lines).toHaveLength(16);
-    expect(lines[lines.length - 1]).not.toContain("more");
+    expect(lines.join("\n")).not.toContain("earlier");
+    expect(lines.join("\n")).not.toContain("later");
   });
 
-  it("truncates from top when hiddenAt is 'top'", () => {
-    widget = new TaskWidget(store, { sortOrder: "status", hiddenAt: "top", showAll: false, maxVisible: 5 });
-    widget.setUICtx(ui.ctx);
-    // 4 completed, 2 in_progress, 2 pending = 8 total, limit 5
-    for (let i = 1; i <= 4; i++) store.create(`Done ${i}`, "Desc");
-    for (let i = 1; i <= 2; i++) store.create(`Working ${i}`, "Desc");
-    for (let i = 1; i <= 2; i++) store.create(`Todo ${i}`, "Desc");
-    for (let i = 1; i <= 4; i++) store.update(String(i), { status: "completed" });
-    for (let i = 5; i <= 6; i++) store.update(String(i), { status: "in_progress" });
-    widget.update();
-
-    const lines = renderWidget(ui.state);
-    // header + overflow line + 5 visible = 7 lines
-    expect(lines).toHaveLength(7);
-    // overflow at top (after header)
-    expect(lines[1]).toContain("3 more");
-    // all in_progress and pending visible
-    expect(lines.some(l => l.includes("Working 1"))).toBe(true);
-    expect(lines.some(l => l.includes("Todo 2"))).toBe(true);
-    // only newest completed (#4) visible
-    expect(lines.some(l => l.includes("Done 4"))).toBe(true);
-    // oldest completed hidden
-    expect(lines.some(l => l.includes("Done 1"))).toBe(false);
-    expect(lines.some(l => l.includes("Done 3"))).toBe(false);
-  });
-
-  it("truncates from bottom by default", () => {
+  it("shows the final window when every task is completed", () => {
     widget = new TaskWidget(store, { maxVisible: 3 });
     widget.setUICtx(ui.ctx);
-    for (let i = 1; i <= 5; i++) store.create(`Task ${i}`, "Desc");
+    for (let i = 1; i <= 5; i++) {
+      store.create(`Task ${i}`, "Desc");
+      store.update(String(i), { status: "completed" });
+    }
     widget.update();
 
     const lines = renderWidget(ui.state);
-    // header + 3 tasks + overflow at bottom = 5 lines
-    expect(lines).toHaveLength(5);
-    expect(lines[1]).toContain("Task 1");
-    expect(lines[3]).toContain("Task 3");
-    expect(lines[4]).toContain("2 more");
-    expect(lines.some(l => l.includes("Task 4"))).toBe(false);
+    expect(lines).toHaveLength(5); // header + top overflow + 3 completed tasks
+    expect(lines[1]).toContain("2 earlier");
+    expect(lines[2]).toContain("Task 3");
+    expect(lines[4]).toContain("Task 5");
+    expect(lines.some(l => l.includes("later"))).toBe(false);
+  });
+
+  it("uses the configured sort order before locating the first unfinished task", () => {
+    widget = new TaskWidget(store, { sortOrder: "status", hiddenAt: "top", maxVisible: 2 });
+    widget.setUICtx(ui.ctx);
+    store.create("Pending task", "Desc");
+    store.create("Completed task", "Desc");
+    store.create("In progress task", "Desc");
+    store.update("2", { status: "completed" });
+    store.update("3", { status: "in_progress" });
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("1 earlier");
+    expect(lines[2]).toContain("In progress task");
+    expect(lines[3]).toContain("Pending task");
+    expect(lines.some(l => l.includes("Completed task"))).toBe(false);
+    expect(lines.some(l => l.includes("later"))).toBe(false);
   });
 
   it("sorts tasks by status when sortOrder is 'status'", () => {
-    widget = new TaskWidget(store, { sortOrder: "status" });
+    widget = new TaskWidget(store, { sortOrder: "status", showAll: true });
     widget.setUICtx(ui.ctx);
     store.create("Pending task", "Desc");           // #1
     store.create("Completed task", "Desc");         // #2
