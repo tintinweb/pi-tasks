@@ -44,7 +44,7 @@ that project sorts by `active` (from global) and shows 5 tasks (from project).
 | Setting | Values | Default | Behaviour |
 |---------|--------|---------|-----------|
 | `sortOrder` | a [preset](#sort-presets) or a [sort spec](#writing-your-own-sort-order) | `id` | The order tasks appear in |
-| `collapseCompleted` | `true` / `false` | `false` | Replace completed tasks with a single `✔ N completed` line at the bottom |
+| `collapseCompleted` | `true` / `false` | `false` | Replace completed tasks with a single `✔ N completed` line at the bottom. When off, they stay in the list, dimmed and struck through |
 | `maxVisible` | `5`–`100` | `10` | Cap on task lines (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | Show every listed task regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | Which end the `… and N more` line collapses from |
@@ -113,7 +113,7 @@ In `/tasks` → Settings, a spec shows up as a read-only `custom` value. The men
 
 ## Task glyphs
 
-`glyphs` sets the characters the widget is drawn with. Every key is optional, and anything you leave out keeps its default:
+`glyphs` sets the characters the widget is drawn with. Every key is optional, and anything you leave out keeps its default — so this is both a complete example and the built-in set written out in full:
 
 ```json
 {
@@ -121,10 +121,21 @@ In `/tasks` → Settings, a spec shows up as a read-only `custom` value. The men
     "completed": "✔",
     "inProgress": "◼",
     "pending": "◻",
-    "spinner": ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"]
+    "spinner": ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"],
+    "completedSummary": "✔",
+    "header": "●",
+    "overflow": "…",
+    "blocked": "›",
+    "inputTokens": "↑",
+    "outputTokens": "↓",
+    "statsSeparator": "·",
+    "trailingEllipsis": "…",
+    "truncation": "..."
   }
 }
 ```
+
+Pasting that whole block changes nothing — it is there to copy and cut down to the keys you care about. `completedSummary` is the only entry that is not a fixed literal: left unset it follows `completed`, whatever you set that to.
 
 Here is every glyph on screen at once, at its default. This is real widget output, with `maxVisible: 5`:
 
