@@ -8,6 +8,7 @@ Everything here is set in `tasks-config.json`. **Configuration is data, never co
 - [The display settings](#the-display-settings)
 - [Sort presets](#sort-presets)
 - [Writing your own sort order](#writing-your-own-sort-order)
+- [Task icons](#task-icons)
 - [Recipes](#recipes)
 - [Troubleshooting](#troubleshooting)
 
@@ -47,6 +48,7 @@ that project sorts by `active` (from global) and shows 5 tasks (from project).
 | `maxVisible` | `5`–`100` | `10` | Cap on task lines (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | Show every listed task regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | Which end the `… and N more` line collapses from |
+| `icons` | an [icon set](#task-icons) | `✔` / `◼` / `◻` + star spinner | The glyphs tasks are marked with |
 
 These compose in a fixed order, which is what makes combinations predictable:
 
@@ -109,6 +111,50 @@ A few things that follow from the design:
 
 In `/tasks` → Settings, a spec shows up as a read-only `custom` value. The menu cannot edit one, and selecting a preset there **replaces** your spec — edit the JSON to get it back.
 
+## Task icons
+
+`icons` sets the glyphs tasks are marked with, in the widget and in `/tasks` → View all tasks. Every key is optional, and anything you leave out keeps its default:
+
+```json
+{
+  "icons": {
+    "completed": "✔",
+    "inProgress": "◼",
+    "pending": "◻",
+    "spinner": ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"]
+  }
+}
+```
+
+| Key | Value | Marks |
+|-----|-------|-------|
+| `completed` | any non-empty string | Finished tasks, and the `✔ N completed` line when `collapseCompleted` is on |
+| `inProgress` | any non-empty string | Tasks that are in progress but not being executed right now |
+| `pending` | any non-empty string | Tasks not started yet |
+| `spinner` | a non-empty list of non-empty strings | The task an agent is actively working on, animated one frame per 150 ms |
+
+A few things worth knowing:
+
+- **A frame is a string, not a character.** `["⣾⣾", "⣽⣽"]`, `["..", "··"]` and emoji with variation selectors are all valid frames. Only the glyphs are yours — the widget still cycles them at its own fixed rate.
+- **Keep every frame the same display width.** Frames are not padded, so a sequence of uneven width shifts the rest of the line back and forth as it animates.
+- **Icons merge per icon, not as a block.** A global `{ "icons": { "pending": "[ ]" } }` and a project `{ "icons": { "completed": "[x]" } }` give you both.
+- **Colors are not configurable.** Your glyph is drawn in the slot's existing color: green for completed, accent for in-progress and the spinner, plain for pending.
+- **Bad values fall back quietly**, one icon at a time — see [Troubleshooting](#troubleshooting).
+- **Icons are config-file only.** `/tasks` → Settings cycles between fixed values, which free-form glyphs aren't.
+
+An all-ASCII set, for a terminal or font that renders the defaults badly:
+
+```json
+{
+  "icons": {
+    "completed": "[x]",
+    "inProgress": "[>]",
+    "pending": "[ ]",
+    "spinner": ["|", "/", "-", "\\"]
+  }
+}
+```
+
 ## Recipes
 
 **Active work first, finished work out of the way.** The most common ask:
@@ -158,6 +204,8 @@ In `/tasks` → Settings, a spec shows up as a read-only `custom` value. The men
 **Two tasks are in the "wrong" order.** They probably tie on every key in your spec. Add `{ "field": "id" }` as the last key.
 
 **The `/tasks` menu shows `custom` and I can't change it.** That's a sort spec in your config. Edit `tasks-config.json` to change it, or pick a preset in the menu to discard it.
+
+**My icons are ignored.** Each of `completed` / `inProgress` / `pending` must be a *non-empty string*; anything else (a number, `null`, `""`) falls back to that one default and leaves the others alone. `spinner` must be a non-empty *array* of non-empty strings — a bare string like `"✳✴"`, an empty array, or one bad frame drops the whole sequence back to the default. Remember that `icons` merges per icon, so a glyph you didn't set in the project file may still be coming from your global one.
 
 **Settings I change in one project show up in another.** Check your global `~/.pi/agent/tasks-config.json` — the settings menu only ever writes the project file, so a value that follows you around is coming from global.
 

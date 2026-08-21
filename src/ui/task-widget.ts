@@ -6,9 +6,12 @@
  *   ◼ in_progress tasks
  *   ◻ pending tasks
  *   ✳/✽ actively executing task (star spinner with activeForm text)
+ *
+ * Those glyphs are the defaults; `icons` in tasks-config.json replaces any of them.
  */
 
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { resolveTaskIcons } from "../task-icons.js";
 import type { TaskStore } from "../task-store.js";
 import type { TasksConfig } from "../tasks-config.js";
 
@@ -42,11 +45,6 @@ export type UICtx = {
     options?: { placement?: "aboveEditor" | "belowEditor" },
   ): void;
 };
-
-/** Star spinner frames for the animated active-task indicator. Claude Code's own
- *  spinner is a shorter mirrored sequence (`· ✢ ✳ ✶ ✻ ✽` and its reverse, with a
- *  ghostty variant); this walks the dingbat block instead. Deliberately ours. */
-const SPINNER = ["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
 
 const DEFAULT_MAX_VISIBLE_TASKS = 10;
 
@@ -155,6 +153,9 @@ export class TaskWidget {
   /** Build widget lines from current live state. */
   private buildWidgetLines(tui: any, theme: Theme): string[] {
     const sortOrder = this.config.sortOrder ?? "id";
+    // Resolved per render, not cached: the extension swaps this config object's
+    // contents when the host moves to a session in another workspace.
+    const icons = resolveTaskIcons(this.config.icons);
     const tasks = this.store.list(sortOrder);
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w);
@@ -171,7 +172,7 @@ export class TaskWidget {
     if (pending.length > 0) parts.push(`${pending.length} open`);
     const statusText = `${tasks.length} tasks (${parts.join(", ")})`;
 
-    const spinnerChar = SPINNER[this.widgetFrame % SPINNER.length];
+    const spinnerFrame = icons.spinner[this.widgetFrame % icons.spinner.length];
     const lines: string[] = [truncate(theme.fg("accent", "●") + " " + theme.fg("accent", statusText))];
 
     // Collapsing only decides what goes in the list; the visible-limit logic below
@@ -199,13 +200,13 @@ export class TaskWidget {
 
       let icon: string;
       if (isActive) {
-        icon = theme.fg("accent", spinnerChar);
+        icon = theme.fg("accent", spinnerFrame);
       } else if (task.status === "completed") {
-        icon = theme.fg("success", "✔");
+        icon = theme.fg("success", icons.completed);
       } else if (task.status === "in_progress") {
-        icon = theme.fg("accent", "◼");
+        icon = theme.fg("accent", icons.inProgress);
       } else {
-        icon = "◻";
+        icon = icons.pending;
       }
 
       let suffix = "";
@@ -252,7 +253,7 @@ export class TaskWidget {
       lines.push(overflowLine);
     }
     if (collapseCompleted && completed.length > 0) {
-      lines.push(truncate(`  ${theme.fg("success", "✔")} ${theme.fg("dim", `${completed.length} completed`)}`));
+      lines.push(truncate(`  ${theme.fg("success", icons.completed)} ${theme.fg("dim", `${completed.length} completed`)}`));
     }
 
     return lines;

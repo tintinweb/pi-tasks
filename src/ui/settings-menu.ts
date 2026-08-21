@@ -58,7 +58,7 @@ export async function openSettingsMenu(
         id: "collapseCompleted",
         label: "Collapse completed tasks",
         description:
-          "When ON, completed tasks are replaced by a single '✔ N completed' line and the " +
+          "When ON, completed tasks are replaced by a single 'N completed' line and the " +
           "visible limit applies only to the tasks left. When OFF, they are listed individually.",
         currentValue: (cfg.collapseCompleted ?? false) ? "on" : "off",
         values: ["on", "off"],

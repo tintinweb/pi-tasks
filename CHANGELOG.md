@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Configurable task icons.** A new `icons` key in `tasks-config.json` replaces the glyphs for completed, in-progress and pending tasks, and the frames of the active-task spinner; a frame may be any non-empty string, not just one character. Every key is optional and falls back to the current default, individually, so a value the config gets wrong never leaves the widget unmarked. Icons merge per icon across the global and project files rather than as a block. See [CUSTOMIZING.md](CUSTOMIZING.md#task-icons).
+
 ## [0.8.0] - 2026-08-16
 
 ### Added

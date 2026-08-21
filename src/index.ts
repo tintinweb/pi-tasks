@@ -28,6 +28,7 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
+import { resolveTaskIcons } from "./task-icons.js";
 import { TaskStore } from "./task-store.js";
 import { loadGlobalTasksConfig, loadTasksConfig } from "./tasks-config.js";
 import type { Task } from "./types.js";
@@ -1227,11 +1228,12 @@ Set up task dependencies:
           return mainMenu();
         }
 
+        const icons = resolveTaskIcons(cfg.icons);
         const statusIcon = (status: string) => {
           switch (status) {
-            case "completed": return "✔";
-            case "in_progress": return "◼";
-            default: return "◻";
+            case "completed": return icons.completed;
+            case "in_progress": return icons.inProgress;
+            default: return icons.pending;
           }
         };
 
@@ -1243,8 +1245,9 @@ Set up task dependencies:
         const selected = await ui.select("Tasks", choices);
         if (!selected || selected === "← Back") return mainMenu();
 
-        // Extract task ID from selection
-        const match = selected.match(/#(\d+)/);
+        // Extract task ID from selection. Anchored on the `[status]` that follows it,
+        // so a configured icon containing a `#` cannot be picked up as the ID.
+        const match = selected.match(/#(\d+) \[/);
         if (match) await viewTaskDetail(match[1]);
         else return viewTasks();
       };

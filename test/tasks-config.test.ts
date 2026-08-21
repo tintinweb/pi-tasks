@@ -137,4 +137,49 @@ describe("tasks config", () => {
     expect(existsSync(projectConfigPath)).toBe(true);
     expect(JSON.parse(readFileSync(projectConfigPath, "utf-8"))).toEqual({});
   });
+
+  it("merges icons per icon rather than replacing the whole set", () => {
+    writeJson(globalConfigPath, { icons: { pending: "[ ]", spinner: ["|", "/"] } });
+    writeJson(projectConfigPath, { icons: { completed: "[x]", spinner: ["-", "\\"] } });
+
+    expect(loadTasksConfig(cwd, agentDir)).toEqual({
+      icons: { pending: "[ ]", completed: "[x]", spinner: ["-", "\\"] },
+    });
+  });
+
+  it("leaves icons absent when neither config sets any", () => {
+    writeJson(globalConfigPath, { autoCascade: true });
+
+    expect(loadTasksConfig(cwd, agentDir)).toEqual({ autoCascade: true });
+  });
+
+  it("does not copy global icons into the project override", () => {
+    writeJson(globalConfigPath, { icons: { pending: "[ ]", completed: "[x]" } });
+    const config = loadTasksConfig(cwd, agentDir);
+
+    config.maxVisible = 5;
+    saveTasksConfig(config, cwd, agentDir);
+
+    expect(JSON.parse(readFileSync(projectConfigPath, "utf-8"))).toEqual({ maxVisible: 5 });
+  });
+
+  it("writes only the icons that differ from the global ones", () => {
+    writeJson(globalConfigPath, { icons: { pending: "[ ]", completed: "[x]" } });
+
+    saveTasksConfig({ icons: { pending: "[ ]", completed: "done", inProgress: "[>]" } }, cwd, agentDir);
+
+    expect(JSON.parse(readFileSync(projectConfigPath, "utf-8"))).toEqual({
+      icons: { completed: "done", inProgress: "[>]" },
+    });
+  });
+
+  it("preserves a project icon override across save and reload cycles", () => {
+    writeJson(globalConfigPath, { icons: { pending: "[ ]" } });
+    writeJson(projectConfigPath, { icons: { completed: "[x]" } });
+
+    saveTasksConfig(loadTasksConfig(cwd, agentDir), cwd, agentDir);
+
+    expect(JSON.parse(readFileSync(projectConfigPath, "utf-8"))).toEqual({ icons: { completed: "[x]" } });
+    expect(loadTasksConfig(cwd, agentDir)).toEqual({ icons: { pending: "[ ]", completed: "[x]" } });
+  });
 });
