@@ -8,7 +8,7 @@ Everything here is set in `tasks-config.json`. **Configuration is data, never co
 - [The display settings](#the-display-settings)
 - [Sort presets](#sort-presets)
 - [Writing your own sort order](#writing-your-own-sort-order)
-- [Task icons](#task-icons)
+- [Task glyphs](#task-glyphs)
 - [Recipes](#recipes)
 - [Troubleshooting](#troubleshooting)
 
@@ -48,7 +48,7 @@ that project sorts by `active` (from global) and shows 5 tasks (from project).
 | `maxVisible` | `5`–`100` | `10` | Cap on task lines (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | Show every listed task regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | Which end the `… and N more` line collapses from |
-| `icons` | an [icon set](#task-icons) | `✔` / `◼` / `◻` + star spinner | The glyphs tasks are marked with |
+| `glyphs` | a [glyph set](#task-glyphs) | `✔` / `◼` / `◻` + star spinner | The glyphs the widget is drawn with |
 
 These compose in a fixed order, which is what makes combinations predictable:
 
@@ -111,13 +111,13 @@ A few things that follow from the design:
 
 In `/tasks` → Settings, a spec shows up as a read-only `custom` value. The menu cannot edit one, and selecting a preset there **replaces** your spec — edit the JSON to get it back.
 
-## Task icons
+## Task glyphs
 
-`icons` sets the glyphs tasks are marked with, in the widget and in `/tasks` → View all tasks. Every key is optional, and anything you leave out keeps its default:
+`glyphs` sets the characters the widget is drawn with. Every key is optional, and anything you leave out keeps its default:
 
 ```json
 {
-  "icons": {
+  "glyphs": {
     "completed": "✔",
     "inProgress": "◼",
     "pending": "◻",
@@ -126,31 +126,71 @@ In `/tasks` → Settings, a spec shows up as a read-only `custom` value. The men
 }
 ```
 
-| Key | Value | Marks |
-|-----|-------|-------|
-| `completed` | any non-empty string | Finished tasks, and the `✔ N completed` line when `collapseCompleted` is on |
-| `inProgress` | any non-empty string | Tasks that are in progress but not being executed right now |
-| `pending` | any non-empty string | Tasks not started yet |
-| `spinner` | a non-empty list of non-empty strings | The task an agent is actively working on, animated one frame per 150 ms |
+Here is every glyph in one widget, at their defaults:
 
-A few things worth knowing:
+```
+● 9 tasks (1 done, 1 in progress, 7 open)      <- header
+  ✔ #1 Write the parser                        <- completed
+  ✳ #2 Running tests (agent ab12c)… (2m · ↑ 4.1k ↓ 850)
+     |  |                          |      |  |     |
+     |  spinner                    |      |  inputTokens / outputTokens
+     |                             |      statsSeparator
+     |                             trailingEllipsis
+  ◻ #3 Ship it › blocked by #2                 <- pending, blocked
+  ◼ #4 Review the PR                           <- inProgress
+    … and 4 more                               <- overflow
+  ✔ 1 completed                                <- completedSummary
+```
 
-- **A frame is a string, not a character.** `["⣾⣾", "⣽⣽"]`, `["..", "··"]` and emoji with variation selectors are all valid frames. Only the glyphs are yours — the widget still cycles them at its own fixed rate.
-- **Keep every frame the same display width.** Frames are not padded, so a sequence of uneven width shifts the rest of the line back and forth as it animates.
-- **Icons merge per icon, not as a block.** A global `{ "icons": { "pending": "[ ]" } }` and a project `{ "icons": { "completed": "[x]" } }` give you both.
-- **Colors are not configurable.** Your glyph is drawn in the slot's existing color: green for completed, accent for in-progress and the spinner, plain for pending.
-- **Bad values fall back quietly**, one icon at a time — see [Troubleshooting](#troubleshooting).
-- **Icons are config-file only.** `/tasks` → Settings cycles between fixed values, which free-form glyphs aren't.
+### The task glyphs
+
+| Key | Default | Marks |
+|-----|---------|-------|
+| `completed` | `✔` | a finished task |
+| `inProgress` | `◼` | a task in progress, but not being executed right now |
+| `pending` | `◻` | a task not started yet |
+| `spinner` | `✳ ✴ ✵ ✶ ✷ ✸ ✹ ✺ ✻ ✼ ✽` | the task an agent is actively working on, one frame per 150 ms |
+| `completedSummary` | follows `completed` | the `N completed` line `collapseCompleted` puts in place of the rows |
+
+`completed`, `inProgress` and `pending` are also used by `/tasks` → View all tasks. Everything else on this page is the widget only.
+
+### The furniture
+
+| Key | Default | Marks |
+|-----|---------|-------|
+| `header` | `●` | the widget's summary line |
+| `overflow` | `…` | the `and N more` line standing in for rows the visible limit hid |
+| `blocked` | `›` | introduces the `blocked by #1, #2` suffix |
+| `inputTokens` | `↑` | precedes the input token count |
+| `outputTokens` | `↓` | precedes the output token count |
+| `statsSeparator` | `·` | sits between elapsed time and token counts |
+| `trailingEllipsis` | `…` | closes the active row's text, marking the action as still running |
+| `truncation` | `...` | marks a line clipped at the terminal's right edge |
+
+### Things worth knowing
+
+- **A glyph is a string, not a character.** `"[x]"`, `"⣾⣾"` and emoji with variation selectors all work, in the spinner and everywhere else.
+- **Keep every spinner frame the same display width.** Frames are not padded, so a sequence of uneven width shifts the rest of the line back and forth as it animates. The same goes for a status glyph against the spinner: give them equal width, or rows will jump when a task starts executing.
+- **Nerd Font glyphs usually want a trailing space**, e.g. `"  "`, because terminals report them as one column wide while drawing them wider. Pad all four task glyphs the same way or they won't line up.
+- **Glyphs merge one by one, not as a block.** A global `{ "glyphs": { "pending": "[ ]" } }` and a project `{ "glyphs": { "completed": "[x]" } }` give you both.
+- **`completedSummary` follows `completed` unless you set it.** Change `completed` alone and the collapsed line follows along; set `completedSummary` to break them apart.
+- **`truncation` is three ASCII dots, not `…`.** That is the terminal-clipping marker the widget has always used; set it to `"…"` if you want the widget consistent with its own `overflow` line.
+- **Colors are not configurable.** Your glyph is drawn in its slot's existing color: green for completed, accent for in-progress, the spinner and the header, dim for the furniture, plain for pending.
+- **A single space is how you hide one.** `" "` is a valid glyph and renders as spacing; an empty string is treated as unset and falls back to the default.
+- **Bad values fall back quietly**, one glyph at a time — see [Troubleshooting](#troubleshooting).
+- **Glyphs are config-file only.** `/tasks` → Settings cycles between fixed values, which free-form glyphs aren't.
 
 An all-ASCII set, for a terminal or font that renders the defaults badly:
 
 ```json
 {
-  "icons": {
+  "glyphs": {
     "completed": "[x]",
     "inProgress": "[>]",
     "pending": "[ ]",
-    "spinner": ["|", "/", "-", "\\"]
+    "spinner": ["|", "/", "-", "\\"],
+    "blocked": "<-",
+    "header": "*"
   }
 }
 ```
@@ -205,7 +245,7 @@ An all-ASCII set, for a terminal or font that renders the defaults badly:
 
 **The `/tasks` menu shows `custom` and I can't change it.** That's a sort spec in your config. Edit `tasks-config.json` to change it, or pick a preset in the menu to discard it.
 
-**My icons are ignored.** Each of `completed` / `inProgress` / `pending` must be a *non-empty string*; anything else (a number, `null`, `""`) falls back to that one default and leaves the others alone. `spinner` must be a non-empty *array* of non-empty strings — a bare string like `"✳✴"`, an empty array, or one bad frame drops the whole sequence back to the default. Remember that `icons` merges per icon, so a glyph you didn't set in the project file may still be coming from your global one.
+**My glyphs are ignored.** Every glyph except `spinner` must be a *non-empty string*; anything else (a number, `null`, `""`) falls back to that one default and leaves the others alone. `spinner` must be a non-empty *array* of non-empty strings — a bare string like `"✳✴"`, an empty array, or one bad frame drops the whole sequence back to the default. Remember that `glyphs` merges one by one, so a glyph you didn't set in the project file may still be coming from your global one.
 
 **Settings I change in one project show up in another.** Check your global `~/.pi/agent/tasks-config.json` — the settings menu only ever writes the project file, so a value that follows you around is coming from global.
 

@@ -140,22 +140,22 @@ describe("/tasks task detail", () => {
     expect((await mock.executeTool("TaskList", {})).content[0].text).toBe("No tasks found");
   });
 
-  it("acts on the picked row even when the status icon contains an ID", async () => {
-    // Nothing stops a hand-written icon from looking like a task marker.
-    config.current = { icons: { pending: "#12" } };
+  it("acts on the picked row even when the status glyph contains an ID", async () => {
+    // Nothing stops a hand-written glyph from looking like a task marker.
+    config.current = { glyphs: { pending: "#12" } };
 
     const { mock } = await runTasks([0, 0, "✗ Delete"], create("Work"));
 
     expect((await mock.executeTool("TaskList", {})).content[0].text).toBe("No tasks found");
   });
 
-  it("lists tasks with the default status icons", async () => {
+  it("lists tasks with the default status glyphs", async () => {
     const { selects } = await runTasks([0, undefined], create("Work"));
     expect(selects[1].choices).toEqual(["◻ #1 [pending] Work", "← Back"]);
   });
 
-  it("lists tasks with the configured status icons", async () => {
-    config.current = { icons: { pending: "[ ]" } };
+  it("lists tasks with the configured status glyphs", async () => {
+    config.current = { glyphs: { pending: "[ ]" } };
 
     const { selects } = await runTasks([0, undefined], create("Work"));
 

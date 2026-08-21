@@ -28,7 +28,7 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
-import { resolveTaskIcons } from "./task-icons.js";
+import { resolveTaskGlyphs } from "./task-glyphs.js";
 import { TaskStore } from "./task-store.js";
 import { loadGlobalTasksConfig, loadTasksConfig } from "./tasks-config.js";
 import type { Task } from "./types.js";
@@ -1228,12 +1228,12 @@ Set up task dependencies:
           return mainMenu();
         }
 
-        const icons = resolveTaskIcons(cfg.icons);
+        const glyphs = resolveTaskGlyphs(cfg.glyphs);
         const statusIcon = (status: string) => {
           switch (status) {
-            case "completed": return icons.completed;
-            case "in_progress": return icons.inProgress;
-            default: return icons.pending;
+            case "completed": return glyphs.completed;
+            case "in_progress": return glyphs.inProgress;
+            default: return glyphs.pending;
           }
         };
 

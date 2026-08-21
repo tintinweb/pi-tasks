@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/1d0ee87a-e0a5-4bfa-a9b9-2f9144cb905b
 ## Features
 
 - **7 LLM-callable tools** — `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskOutput`, `TaskStop`, `TaskExecute` — matching Claude Code's exact tool specs and descriptions
-- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status icons, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time and token counts
+- **Persistent widget** — live task list above the editor with `✔`/`◼`/`◻` status marks, task numbers (`#1`, `#2`, …), strikethrough for completed tasks, star spinner (`✳✽`) for active tasks with elapsed time and token counts. Every glyph is [configurable](CUSTOMIZING.md#task-glyphs)
 - **System-reminder injection** — periodic `<system-reminder>` nudges injected into the upcoming LLM request (via the `context` hook, transient and never persisted) when task tools haven't been used recently, or when a task is left stuck `in_progress` after a text-only turn. Shaped after Claude Code's todo reminders — an empty-list nudge or a JSON echo of the current list (capped at 10 tasks)
 - **Prompt guidelines** — workflow contract encoded in tool descriptions, nudging the LLM at the point of tool use
 - **Dependency management** — bidirectional `blocks`/`blockedBy` relationships with warnings for cycles, self-deps, and dangling references
@@ -55,7 +55,7 @@ The extension renders a persistent widget above the editor:
 
 ### Widget display settings
 
-How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved as project overrides in `.pi/tasks-config.json`), except `icons`, which is set in the config file directly. All defaults preserve the original behaviour.
+How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved as project overrides in `.pi/tasks-config.json`), except `glyphs`, which is set in the config file directly. All defaults preserve the original behaviour.
 
 > **[→ Customizing the task widget](CUSTOMIZING.md)** — the full guide: global vs. project config, sort presets, writing your own sort order, and recipes.
 
@@ -66,7 +66,7 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 | `maxVisible` | `5`–`100` | `10` | Caps how many task lines the widget shows (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | When `true`, every listed task is shown regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortOrder: status` to keep active work visible and fold completed tasks away |
-| `icons` | an [icon set](CUSTOMIZING.md#task-icons) | `✔` / `◼` / `◻` + star spinner | The glyphs for completed, in-progress and pending tasks, and the frames of the active-task spinner. Config file only |
+| `glyphs` | a [glyph set](CUSTOMIZING.md#task-glyphs) | `✔` / `◼` / `◻` + star spinner | Every character the widget is drawn with — status marks, spinner frames, header bullet, overflow and truncation markers, token arrows. Config file only |
 
 > Note: the widget's `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`), which is the reverse of the `TaskList` tool's pending-first order. Use `active` for pending-first.
 
@@ -242,7 +242,7 @@ Both auto-clear modes use a turn-based delay for non-jarring UX — tasks linger
 
 In either mode, a list with nothing left to do is also retired when a *later* batch of work begins, however long it has been sitting there. The turn delay only runs while the conversation does, so a list completed just before the agent stopped would otherwise still be on screen when the next task arrived, and that task would join it. The finished list stays visible while you read it and through any follow-up question, and goes when the agent starts new work. Tasks the agent adds to a list it is still working through are unaffected, and task IDs stay monotonic and are never reused.
 
-Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `collapseCompleted` / `maxVisible` / `showAll` / `hiddenAt`) changed through `/tasks` are saved as project overrides in `<workspace>/.pi/tasks-config.json`. `icons` is config-file only — see [CUSTOMIZING.md](CUSTOMIZING.md#task-icons).
+Settings (`taskScope`, `autoCascade`, `autoClearCompleted`, plus the [widget display settings](#widget-display-settings) `sortOrder` / `collapseCompleted` / `maxVisible` / `showAll` / `hiddenAt`) changed through `/tasks` are saved as project overrides in `<workspace>/.pi/tasks-config.json`. `glyphs` is config-file only — see [CUSTOMIZING.md](CUSTOMIZING.md#task-glyphs).
 
 ### Global defaults
 
@@ -361,10 +361,10 @@ src/
 ├── task-store.ts       # File-backed store with CRUD, dependencies, locking
 ├── auto-clear.ts       # Turn-based auto-clearing of completed tasks (AutoClearManager)
 ├── tasks-config.ts     # Global defaults and project override persistence
-├── task-icons.ts       # Status glyph defaults and config validation
+├── task-glyphs.ts      # Glyph defaults and config validation
 ├── process-tracker.ts  # Background process output buffering and stop
 └── ui/
-    ├── task-widget.ts  # Persistent widget with status icons and spinner
+    ├── task-widget.ts  # Persistent widget with status glyphs and spinner
     └── settings-menu.ts  # /tasks → Settings panel (SettingsList TUI component)
 ```
 

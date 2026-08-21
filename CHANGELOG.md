@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Configurable task icons.** A new `icons` key in `tasks-config.json` sets the glyphs for completed, in-progress and pending tasks, and the frames of the active-task spinner. Every key is optional and falls back to its current default individually, so a config that gets one wrong never leaves a task unmarked. See [CUSTOMIZING.md](CUSTOMIZING.md#task-icons).
+- **Configurable widget glyphs.** A new `glyphs` key in `tasks-config.json` sets every character the task widget is drawn with: the completed, in-progress and pending marks, the spinner frames, the header bullet, the blocked-by and overflow markers, the token arrows, and the marker used when a line is clipped at the terminal edge. Every key is optional and falls back to its current default individually, so a config that gets one wrong never leaves a task unmarked. See [CUSTOMIZING.md](CUSTOMIZING.md#task-glyphs).
 
 ## [0.8.0] - 2026-08-16
 
