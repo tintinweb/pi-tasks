@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **Configurable widget glyphs.** A new `glyphs` key in `tasks-config.json` sets every character the task widget is drawn with — the status marks, the spinner frames, and the furniture around them. Every key is optional and falls back to its current default individually, so a config that gets one wrong never leaves a task unmarked. See [CUSTOMIZING.md](CUSTOMIZING.md#task-glyphs).
-
 ## [0.8.0] - 2026-08-16
 
 ### Added
