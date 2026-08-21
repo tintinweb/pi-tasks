@@ -697,10 +697,8 @@ describe("configurable glyphs", () => {
     return renderWidget(ui.state);
   }
 
-  /** truncateToWidth wraps its marker in reset codes; the mock theme adds none. */
-  const plain = (line: string) => line.replace(/\u001b\[[0-9;]*m/g, "");
-
-  /** Render one over-long task at a 20-column terminal. */
+  /** Render one over-long task at a 20-column terminal, ANSI stripped — truncateToWidth
+   *  wraps its marker in reset codes, and the mock theme adds none of its own. */
   function clippedAt20(glyphs: TasksConfig["glyphs"]) {
     store = new TaskStore();
     ui = mockUICtx();
@@ -709,7 +707,7 @@ describe("configurable glyphs", () => {
     store.create("A subject far too long for this terminal", "Desc");
     widget.update();
 
-    return plain(renderWidget(ui.state, 20)[1]);
+    return renderWidget(ui.state, 20)[1].replace(/\u001b\[[0-9;]*m/g, "");
   }
 
   beforeEach(() => {

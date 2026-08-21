@@ -215,21 +215,6 @@ The thirteenth, `truncation`, only shows up when a line is too wide for the term
 - **Bad values fall back quietly**, one glyph at a time — see [Troubleshooting](#troubleshooting).
 - **Glyphs are config-file only.** `/tasks` → Settings cycles between fixed values, which free-form glyphs aren't.
 
-An all-ASCII set, for a terminal or font that renders the defaults badly:
-
-```json
-{
-  "glyphs": {
-    "completed": "[x]",
-    "inProgress": "[>]",
-    "pending": "[ ]",
-    "spinner": ["|", "/", "-", "\\"],
-    "blocked": "<-",
-    "header": "*"
-  }
-}
-```
-
 ## Recipes
 
 **Active work first, finished work out of the way.** The most common ask:
@@ -268,6 +253,21 @@ An all-ASCII set, for a terminal or font that renders the defaults badly:
 
 ```json
 { "sortOrder": [{ "field": "id", "direction": "desc" }] }
+```
+
+**An all-ASCII widget**, for a terminal or font that renders the default [glyphs](#task-glyphs) badly. Only the keys you name change:
+
+```json
+{
+  "glyphs": {
+    "completed": "[x]",
+    "inProgress": "[>]",
+    "pending": "[ ]",
+    "spinner": ["|", "/", "-", "\\"],
+    "blocked": "<-",
+    "header": "*"
+  }
+}
 ```
 
 ## Troubleshooting
