@@ -6,23 +6,6 @@
  * the widget, so anything unrecognised falls back to the built-in glyph.
  */
 
-/** Glyphs as written in `tasks-config.json`; every key optional. */
-export interface TaskGlyphsConfig {
-  completed?: string;
-  inProgress?: string;
-  pending?: string;
-  spinner?: string[];
-  completedSummary?: string;
-  header?: string;
-  overflow?: string;
-  blocked?: string;
-  inputTokens?: string;
-  outputTokens?: string;
-  statsSeparator?: string;
-  trailingEllipsis?: string;
-  truncation?: string;
-}
-
 /** A fully resolved glyph set — what the render sites consume. */
 export interface TaskGlyphs {
   /** Completed task rows, in the widget and the /tasks list. */
@@ -52,6 +35,12 @@ export interface TaskGlyphs {
   /** Marks a line clipped at the terminal's right edge. */
   truncation: string;
 }
+
+/** Glyphs as written in `tasks-config.json`: every resolved glyph, all optional.
+ *  Derived rather than restated, so a glyph cannot be added to one list and
+ *  forgotten in the other. `spinner` is respelled because the resolved form is
+ *  readonly while JSON hands us a plain array. */
+export type TaskGlyphsConfig = Partial<Omit<TaskGlyphs, "spinner">> & { spinner?: string[] };
 
 /** Every glyph's built-in default. `completedSummary` is deliberately absent: it has
  *  no literal of its own and inherits whatever `completed` resolves to.

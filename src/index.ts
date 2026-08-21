@@ -1229,7 +1229,7 @@ Set up task dependencies:
         }
 
         const glyphs = resolveTaskGlyphs(cfg.glyphs);
-        const statusIcon = (status: string) => {
+        const statusGlyph = (status: string) => {
           switch (status) {
             case "completed": return glyphs.completed;
             case "in_progress": return glyphs.inProgress;
@@ -1238,14 +1238,14 @@ Set up task dependencies:
         };
 
         const choices = tasks.map(t =>
-          `${statusIcon(t.status)} #${t.id} [${t.status}] ${t.subject}`
+          `${statusGlyph(t.status)} #${t.id} [${t.status}] ${t.subject}`
         );
         choices.push("← Back");
 
         const selected = await ui.select("Tasks", choices);
         if (!selected || selected === "← Back") return mainMenu();
 
-        // Matched by row position rather than parsed out of the label: both the icon
+        // Matched by row position rather than parsed out of the label: both the glyph
         // and the subject are free text, and either can contain something like "#42".
         const picked = tasks[choices.indexOf(selected)];
         if (picked) await viewTaskDetail(picked.id);

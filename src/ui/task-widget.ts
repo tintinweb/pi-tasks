@@ -1,5 +1,5 @@
 /**
- * task-widget.ts — Persistent widget showing task list with status icons and progress.
+ * task-widget.ts — Persistent widget showing task list with status glyphs and progress.
  *
  * Display style matches Claude Code's task list:
  *   ✔ completed tasks (strikethrough + dim)
@@ -199,15 +199,15 @@ export class TaskWidget {
       const task = visible[i];
       const isActive = this.activeTaskIds.has(task.id) && task.status === "in_progress";
 
-      let icon: string;
+      let statusGlyph: string;
       if (isActive) {
-        icon = theme.fg("accent", spinnerFrame);
+        statusGlyph = theme.fg("accent", spinnerFrame);
       } else if (task.status === "completed") {
-        icon = theme.fg("success", glyphs.completed);
+        statusGlyph = theme.fg("success", glyphs.completed);
       } else if (task.status === "in_progress") {
-        icon = theme.fg("accent", glyphs.inProgress);
+        statusGlyph = theme.fg("accent", glyphs.inProgress);
       } else {
-        icon = glyphs.pending;
+        statusGlyph = glyphs.pending;
       }
 
       let suffix = "";
@@ -237,16 +237,16 @@ export class TaskWidget {
             ? ` ${theme.fg("dim", `(${elapsed} ${glyphs.statsSeparator} ${tokenParts.join(" ")})`)}`
             : ` ${theme.fg("dim", `(${elapsed})`)}`;
         }
-        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${
+        text = `  ${statusGlyph} ${theme.fg("dim", "#" + task.id)} ${
           theme.fg("accent", form + agentLabel + glyphs.trailingEllipsis)
         }${stats}`;
       } else if (task.status === "completed") {
-        text = `  ${icon} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}`;
+        text = `  ${statusGlyph} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}`;
       } else {
         const agentSuffix = task.status === "in_progress" && task.metadata?.agentId
           ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
           : "";
-        text = `  ${icon} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}`;
+        text = `  ${statusGlyph} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}`;
       }
 
       lines.push(truncate(text + suffix));

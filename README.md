@@ -46,7 +46,7 @@ The extension renders a persistent widget above the editor:
   ◻ #4 Test time travel at 88 mph › blocked by #2, #3
 ```
 
-| Icon | Meaning |
+| Glyph | Meaning |
 |------|---------|
 | `✔` | Completed (strikethrough + dim) |
 | `◼` | In-progress (not actively executing) |

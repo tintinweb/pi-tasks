@@ -126,21 +126,45 @@ In `/tasks` → Settings, a spec shows up as a read-only `custom` value. The men
 }
 ```
 
-Here is every glyph in one widget, at their defaults:
+Here is every glyph on screen at once, at its default. This is real widget output, with `maxVisible: 5`:
 
 ```
-● 9 tasks (1 done, 1 in progress, 7 open)      <- header
-  ✔ #1 Write the parser                        <- completed
-  ✳ #2 Running tests (agent ab12c)… (2m · ↑ 4.1k ↓ 850)
-     |  |                          |      |  |     |
-     |  spinner                    |      |  inputTokens / outputTokens
-     |                             |      statsSeparator
-     |                             trailingEllipsis
-  ◻ #3 Ship it › blocked by #2                 <- pending, blocked
-  ◼ #4 Review the PR                           <- inProgress
-    … and 4 more                               <- overflow
-  ✔ 1 completed                                <- completedSummary
+● 8 tasks (1 done, 2 in progress, 5 open)
+  ✔ #1 Write the parser
+  ✷ #2 Running the integration suite (agent ab12c)… (2m 49s · ↑ 4.1k ↓ 850)
+  ◻ #3 Ship it › blocked by #2
+  ◼ #4 Review the PR
+  ◻ #5 Backlog item 5
+    … and 3 more
 ```
+
+| On that screen | Glyph |
+|---|---|
+| `●` opening the first line | `header` |
+| `✔` on #1 | `completed` |
+| `✷` on #2 — one frame of the animation | `spinner` |
+| `…` closing #2's text | `trailingEllipsis` |
+| `·` between `2m 49s` and the counts | `statsSeparator` |
+| `↑` and `↓` before the counts | `inputTokens`, `outputTokens` |
+| `◻` on #3 and #5 | `pending` |
+| `›` before `blocked by #2` | `blocked` |
+| `◼` on #4 | `inProgress` |
+| `…` opening the last line | `overflow` |
+
+Turn on `collapseCompleted` and #1 leaves the list for a count line of its own, marked with `completedSummary`:
+
+```
+● 8 tasks (1 done, 2 in progress, 5 open)
+  ✷ #2 Running the integration suite (agent ab12c)… (2m 49s · ↑ 4.1k ↓ 850)
+  ◻ #3 Ship it › blocked by #2
+  ◼ #4 Review the PR
+  ◻ #5 Backlog item 5
+  ◻ #6 Backlog item 6
+    … and 2 more
+  ✔ 1 completed
+```
+
+The thirteenth, `truncation`, only shows up when a line is too wide for the terminal.
 
 ### The task glyphs
 

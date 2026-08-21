@@ -35,11 +35,11 @@ function mockUICtx() {
 }
 
 /** Render the widget and return its lines. */
-function renderWidget(state: ReturnType<typeof mockUICtx>["state"]): string[] {
+function renderWidget(state: ReturnType<typeof mockUICtx>["state"], columns = 200): string[] {
   const entry = state.widgets.get("tasks");
   if (!entry?.content) return [];
   const theme = mockTheme();
-  const tui = { terminal: { columns: 200 }, requestRender() {} };
+  const tui = { terminal: { columns }, requestRender() {} };
   const result = entry.content(tui, theme);
   return result.render();
 }
@@ -709,8 +709,7 @@ describe("configurable glyphs", () => {
     store.create("A subject far too long for this terminal", "Desc");
     widget.update();
 
-    const entry = ui.state.widgets.get("tasks");
-    return entry.content({ terminal: { columns: 20 }, requestRender() {} }, mockTheme()).render()[1];
+    return plain(renderWidget(ui.state, 20)[1]);
   }
 
   beforeEach(() => {
@@ -803,12 +802,21 @@ describe("configurable glyphs", () => {
     expect(activeLine).toContain("(5s | in 1.5k out 800)");
   });
 
+  // Asserted by shape, not by exact string: where pi-tui puts the cut is its
+  // arithmetic, not the widget's contract.
   it("clips over-wide lines with the configured truncation glyph", () => {
-    expect(plain(clippedAt20({ truncation: "…" }))).toBe("  ◻ #1 A subject fa…");
+    const line = clippedAt20({ truncation: "…" });
+
+    expect(line.endsWith("…")).toBe(true);
+    expect(line.length).toBeLessThanOrEqual(20);
+    expect(line).not.toContain("terminal");
   });
 
   it("clips with three ASCII dots by default", () => {
-    expect(plain(clippedAt20(undefined))).toBe("  ◻ #1 A subject ...");
+    const line = clippedAt20(undefined);
+
+    expect(line.endsWith("...")).toBe(true);
+    expect(line).not.toContain("…");
   });
 
   it("falls back to the defaults for unusable glyph values", () => {
