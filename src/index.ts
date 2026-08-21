@@ -1245,10 +1245,10 @@ Set up task dependencies:
         const selected = await ui.select("Tasks", choices);
         if (!selected || selected === "← Back") return mainMenu();
 
-        // Extract task ID from selection. Anchored on the `[status]` that follows it,
-        // so a configured icon containing a `#` cannot be picked up as the ID.
-        const match = selected.match(/#(\d+) \[/);
-        if (match) await viewTaskDetail(match[1]);
+        // Matched by row position rather than parsed out of the label: both the icon
+        // and the subject are free text, and either can contain something like "#42".
+        const picked = tasks[choices.indexOf(selected)];
+        if (picked) await viewTaskDetail(picked.id);
         else return viewTasks();
       };
 

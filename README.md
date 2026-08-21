@@ -55,7 +55,7 @@ The extension renders a persistent widget above the editor:
 
 ### Widget display settings
 
-How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved as project overrides in `.pi/tasks-config.json`). All defaults preserve the original behaviour.
+How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved as project overrides in `.pi/tasks-config.json`), except `icons`, which is set in the config file directly. All defaults preserve the original behaviour.
 
 > **[→ Customizing the task widget](CUSTOMIZING.md)** — the full guide: global vs. project config, sort presets, writing your own sort order, and recipes.
 
@@ -66,7 +66,7 @@ How tasks are sorted and how many are shown can be configured via `/tasks` → S
 | `maxVisible` | `5`–`100` | `10` | Caps how many task lines the widget shows (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | When `true`, every listed task is shown regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | When the list overflows `maxVisible`, where the `… and N more` collapse happens. `top` pairs well with `sortOrder: status` to keep active work visible and fold completed tasks away |
-| `icons` | an [icon set](CUSTOMIZING.md#task-icons) | `✔` / `◼` / `◻` + star spinner | The glyphs for completed, in-progress and pending tasks, and the frames of the active-task spinner |
+| `icons` | an [icon set](CUSTOMIZING.md#task-icons) | `✔` / `◼` / `◻` + star spinner | The glyphs for completed, in-progress and pending tasks, and the frames of the active-task spinner. Config file only |
 
 > Note: the widget's `status` order is completed-first (so finished work collapses at the top with `hiddenAt: top`), which is the reverse of the `TaskList` tool's pending-first order. Use `active` for pending-first.
 

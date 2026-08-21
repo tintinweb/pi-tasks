@@ -19,7 +19,8 @@ export interface TaskIcons {
   completed: string;
   inProgress: string;
   pending: string;
-  spinner: string[];
+  /** Readonly so the shared default sequence can be handed out without copying it. */
+  spinner: readonly string[];
 }
 
 /** Star spinner frames for the animated active-task indicator. Claude Code's own
@@ -51,7 +52,6 @@ export function resolveTaskIcons(icons: TaskIconsConfig | undefined): TaskIcons 
     completed: glyph(icons?.completed, DEFAULT_ICONS.completed),
     inProgress: glyph(icons?.inProgress, DEFAULT_ICONS.inProgress),
     pending: glyph(icons?.pending, DEFAULT_ICONS.pending),
-    // Copied so a render site cannot mutate the defaults for every later caller.
-    spinner: [...(isSpinner(spinner) ? spinner : DEFAULT_ICONS.spinner)],
+    spinner: isSpinner(spinner) ? spinner : DEFAULT_ICONS.spinner,
   };
 }

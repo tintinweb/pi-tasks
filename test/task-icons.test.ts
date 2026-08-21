@@ -65,10 +65,4 @@ describe("resolveTaskIcons", () => {
       expect(resolveTaskIcons({ spinner } as unknown as TaskIconsConfig).spinner).toEqual(defaults.spinner);
     }
   });
-
-  it("does not let a caller mutate the defaults through a resolved icon set", () => {
-    resolveTaskIcons(undefined).spinner.push("boom");
-
-    expect(resolveTaskIcons(undefined).spinner).toHaveLength(11);
-  });
 });
