@@ -2,16 +2,17 @@
  * task-store.ts — File-backed task store with CRUD, dependency management, and file locking.
  *
  * Session-scoped (default): in-memory Map — no disk I/O.
- * Shared (PI_TASK_LIST_ID set): <agent-dir>/tasks/<listId>.json with file locking.
+ * Shared (PI_TASK_LIST_ID set): ~/.pi/tasks/<listId>.json with file locking.
  */
 
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute } from "node:path";
-import { sharedListFile } from "./task-paths.js";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import { sortTasks, type TaskSortOrder } from "./task-sort.js";
 import type { Task, TaskStatus, TaskStoreData } from "./types.js";
 
+const TASKS_DIR = join(homedir(), ".pi", "tasks");
 const LOCK_RETRY_MS = 50;
 const LOCK_MAX_RETRIES = 100; // 5s max
 
@@ -104,7 +105,7 @@ export class TaskStore {
   constructor(listIdOrPath?: string) {
     if (!listIdOrPath) return;
     const isAbsPath = isAbsolute(listIdOrPath);
-    const filePath = isAbsPath ? listIdOrPath : sharedListFile(listIdOrPath);
+    const filePath = isAbsPath ? listIdOrPath : join(TASKS_DIR, `${listIdOrPath}.json`);
     // Directory is created lazily on the first write (acquireLock/save both
     // mkdir it), so a session that never persists a task leaves no .pi/tasks/.
     this.filePath = filePath;

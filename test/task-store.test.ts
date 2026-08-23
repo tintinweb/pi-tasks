@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TaskStore } from "../src/task-store.js";
 
@@ -363,7 +362,7 @@ describe("TaskStore (in-memory)", () => {
 
 describe("TaskStore (file-backed)", () => {
   const testListId = `test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const tasksDir = join(getAgentDir(), "tasks");
+  const tasksDir = join(homedir(), ".pi", "tasks");
   const filePath = join(tasksDir, `${testListId}.json`);
 
   afterEach(() => {
@@ -522,40 +521,23 @@ describe("TaskStore (absolute path)", () => {
 });
 
 describe("TaskStore (list ID resolution)", () => {
-  /** Run `fn` against a scratch home directory. */
-  function withHome(fn: (home: string) => void): void {
+  it("resolves a bare list ID under the user's home directory, not the working directory", async () => {
+    // PI_TASKS=my-list is a shared-list name, not a path — it must land in
+    // ~/.pi/tasks/. TASKS_DIR is computed at module load, so the module has to be
+    // re-imported after HOME is stubbed.
     const home = mkdtempSync(join(tmpdir(), "pi-tasks-home-"));
     vi.stubEnv("HOME", home);
+    vi.resetModules();
     try {
-      fn(home);
+      const { TaskStore: FreshTaskStore } = await import("../src/task-store.js");
+      new FreshTaskStore("my-list").create("Shared list task", "d");
+
+      expect(existsSync(join(home, ".pi", "tasks", "my-list.json"))).toBe(true);
     } finally {
       vi.unstubAllEnvs();
+      vi.resetModules();
       rmSync(home, { recursive: true, force: true });
     }
-  }
-
-  it("resolves a bare list ID under the agent directory, not the working directory", () => {
-    // PI_TASKS=my-list is a shared-list name, not a path — it must land in the
-    // user's own storage, alongside every other piece of pi state.
-    withHome(home => {
-      new TaskStore("my-list").create("Shared list task", "d");
-
-      expect(existsSync(join(home, ".pi", "agent", "tasks", "my-list.json"))).toBe(true);
-    });
-  });
-
-  it("keeps reading a list already held at the pre-agent-dir location", () => {
-    // These lived under a hardcoded ~/.pi/tasks/ before the agent directory was
-    // followed. Resolving such a list to the new path would strand it: still
-    // named by PI_TASKS, but suddenly empty.
-    withHome(home => {
-      const legacy = join(home, ".pi", "tasks", "legacy-list.json");
-      mkdirSync(dirname(legacy), { recursive: true });
-      new TaskStore(legacy).create("Written before the move", "d");
-
-      expect(new TaskStore("legacy-list").list().map(t => t.subject)).toEqual(["Written before the move"]);
-      expect(existsSync(join(home, ".pi", "agent", "tasks", "legacy-list.json"))).toBe(false);
-    });
   });
 });
 

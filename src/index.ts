@@ -28,7 +28,7 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
-import { migrateLegacySessionTaskFiles, reclaimSessionTasksDir, sessionTaskFile } from "./task-paths.js";
+import { reclaimGlobalSessionTasksDir, sessionTaskFile } from "./task-paths.js";
 import { TaskStore } from "./task-store.js";
 import { loadGlobalTasksConfig, loadTasksConfig } from "./tasks-config.js";
 import type { Task } from "./types.js";
@@ -133,6 +133,10 @@ export default function (pi: ExtensionAPI) {
   const piTasks = process.env.PI_TASKS;
   let taskScope = cfg.taskScope ?? "session";
 
+  /** Both session scopes persist one file per session; they differ only in where it
+   *  lives, so every lifecycle rule about session files applies to each of them. */
+  const isSessionScope = () => taskScope === "session" || taskScope === "session-global";
+
   /** Resolve both the backing path and a stable identity for the active store. */
   function resolveStoreTarget(cwd?: string, sessionId?: string): { key: string; path?: string } {
     if (piTasks === "off") return { key: "memory:env" };
@@ -144,11 +148,11 @@ export default function (pi: ExtensionAPI) {
     if (piTasks) return { key: `named:${piTasks}`, path: piTasks };
     if (taskScope === "memory") return { key: "memory:config" };
     if (!cwd) return { key: "pending:workspace" };
-    if (taskScope === "session" && sessionId) {
-      const path = sessionTaskFile(cwd, sessionId);
+    if (isSessionScope() && sessionId) {
+      const path = sessionTaskFile(cwd, sessionId, taskScope);
       return { key: `path:${path}`, path };
     }
-    if (taskScope === "session") return { key: "pending:session" };
+    if (isSessionScope()) return { key: "pending:session" };
     const path = join(cwd, ".pi", "tasks", "tasks.json");
     return { key: `path:${path}`, path };
   }
@@ -365,14 +369,11 @@ export default function (pi: ExtensionAPI) {
     // ID alone would write tasks-<id>.json for a session that can never be resumed
     // and is orphaned the moment pi exits: if pi is not persisting the conversation,
     // don't persist the task list either.
-    const sessionId = taskScope === "session" && !piTasks && ctx.sessionManager.getSessionFile()
+    const sessionId = isSessionScope() && !piTasks && ctx.sessionManager.getSessionFile()
       ? ctx.sessionManager.getSessionId()
       : undefined;
     const nextTarget = resolveStoreTarget(ctx.cwd, sessionId);
     if (nextTarget.key !== storeTarget.key) {
-      if (taskScope === "session" && !piTasks && sessionId) {
-        migrateLegacySessionTaskFiles(ctx.cwd);
-      }
       store = new TaskStore(nextTarget.path);
       widget.setStore(store);
       storeTarget = nextTarget;
@@ -383,12 +384,15 @@ export default function (pi: ExtensionAPI) {
     configuredCwd = ctx.cwd;
   }
 
-  /** Delete an emptied session file, and the workspace directory that held it
-   *  once its last session is gone. Only default session storage is ours to
-   *  reclaim — a PI_TASKS path can point anywhere, and that parent is not. */
+  /** Delete an emptied session file, and — under `session-global` only — the
+   *  directory that held it once its last session is gone. Nothing else is ours
+   *  to reclaim: a PI_TASKS path can point anywhere, and `<workspace>/.pi/tasks/`
+   *  is left standing exactly as it always has been. */
   function deleteSessionFileIfEmpty() {
     if (!store.deleteFileIfEmpty()) return;
-    if (!piTasks && configuredCwd) reclaimSessionTasksDir(configuredCwd);
+    if (taskScope === "session-global" && !piTasks && configuredCwd) {
+      reclaimGlobalSessionTasksDir(configuredCwd);
+    }
   }
 
   /** Re-link persisted in-progress tasks to the subagents still running for them.
@@ -422,7 +426,7 @@ export default function (pi: ExtensionAPI) {
     if (tasks.length > 0) {
       if (!isResume && tasks.every(t => t.status === "completed")) {
         store.clearCompleted();
-        if (taskScope === "session") deleteSessionFileIfEmpty();
+        if (isSessionScope()) deleteSessionFileIfEmpty();
       } else {
         widget.update();
       }
@@ -444,7 +448,7 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui as UICtx);
     initializeStoreForContext(ctx);
     if (autoClear.onTurnStart(cadence.currentTurn)) {
-      if (taskScope === "session") deleteSessionFileIfEmpty();
+      if (isSessionScope()) deleteSessionFileIfEmpty();
       widget.update();
     }
   });
@@ -1221,12 +1225,12 @@ Set up task dependencies:
           await settingsMenu();
         } else if (choice.startsWith("Clear completed")) {
           store.clearCompleted();
-          if (taskScope === "session") deleteSessionFileIfEmpty();
+          if (isSessionScope()) deleteSessionFileIfEmpty();
           widget.update();
           await mainMenu();
         } else if (choice.startsWith("Clear all")) {
           store.clearAll();
-          if (taskScope === "session") deleteSessionFileIfEmpty();
+          if (isSessionScope()) deleteSessionFileIfEmpty();
           widget.update();
           await mainMenu();
         }

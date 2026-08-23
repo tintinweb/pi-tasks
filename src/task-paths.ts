@@ -1,36 +1,21 @@
 /**
- * task-paths.ts — Where task files live.
+ * task-paths.ts — Where session task files live.
  *
- * Session-scoped state is runtime data, not project content, so it is keyed by
- * workspace under pi's agent directory rather than written into the repository.
- * That is where pi keeps its own per-workspace session logs, and where every
- * other extension keeps user-level state. Shared named lists
- * (`PI_TASKS=sprint-1`) sit alongside it.
+ * `session` scope keeps them in the workspace, as it always has. `session-global`
+ * keeps them under pi's agent directory instead, beside pi's own per-workspace
+ * session logs, for people who would rather their repositories stayed clean.
+ *
+ * The choice only ever decides where a *new* file is created. A session already
+ * holding a file in the workspace keeps using it under either setting, so opting
+ * in moves nothing and opting back out strands nothing.
  */
 
-import { constants, copyFileSync, existsSync, mkdirSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, rmdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { TasksConfig } from "./tasks-config.js";
 
-/** Root for task state that belongs to the user rather than to any one project.
- *  Resolved per call, never captured: `getAgentDir()` reads the environment. */
-function tasksDir(): string {
-  return join(getAgentDir(), "tasks");
-}
-
-/**
- * File backing a shared named list (`PI_TASKS=sprint-1`).
- *
- * These lived under a hardcoded `~/.pi/tasks/` before the agent directory was
- * followed. A list already sitting there keeps being read there — moving it
- * would orphan a list its owner can still name.
- */
-export function sharedListFile(listId: string): string {
-  const current = join(tasksDir(), `${listId}.json`);
-  const legacy = join(homedir(), ".pi", "tasks", `${listId}.json`);
-  return !existsSync(current) && existsSync(legacy) ? legacy : current;
-}
+type TaskScope = NonNullable<TasksConfig["taskScope"]>;
 
 /**
  * Directory name standing for one workspace.
@@ -44,56 +29,37 @@ export function projectKey(cwd: string): string {
   return `--${resolve(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }
 
-/** Global directory holding every session's tasks for one workspace. */
-export function sessionTasksDir(cwd: string): string {
-  return join(tasksDir(), "sessions", projectKey(cwd));
+/** Where `session-global` collects one workspace's session files.
+ *  Resolved per call, never captured: `getAgentDir()` reads the environment. */
+export function globalSessionTasksDir(cwd: string): string {
+  return join(getAgentDir(), "tasks", "sessions", projectKey(cwd));
 }
 
-/** Default task file for one persisted session in a workspace. */
-export function sessionTaskFile(cwd: string, sessionId: string): string {
-  return join(sessionTasksDir(cwd), `tasks-${sessionId}.json`);
-}
-
-/** Previous default location, retained only as a migration source. */
-export function legacySessionTasksDir(cwd: string): string {
-  return join(cwd, ".pi", "tasks");
-}
-
-/** Remove a workspace's session directory once it holds nothing. */
-export function reclaimSessionTasksDir(cwd: string): void {
-  try { rmdirSync(sessionTasksDir(cwd)); } catch { /* other sessions still stored */ }
+/** The in-workspace location, unchanged since session scope was introduced. */
+export function workspaceSessionTaskFile(cwd: string, sessionId: string): string {
+  return join(cwd, ".pi", "tasks", `tasks-${sessionId}.json`);
 }
 
 /**
- * Move a workspace's leftover session files into global storage.
+ * File backing one persisted session.
  *
- * The whole directory is swept, not just the session being opened: the point of
- * the move is that `.pi/tasks/` stops existing in the repository, and most of
- * the sessions that left a file behind will never be resumed to migrate their
- * own. Project scope's `tasks.json` is not a session file and stays put.
- *
- * Global state always wins — a file already there belongs to a session that has
- * run since the move, and its legacy counterpart is stale. Anything that cannot
- * be migrated is left untouched rather than risking its only copy.
+ * Under `session-global` the workspace is still consulted first: a session that
+ * already has a file there is still that file's session, and reading it is the
+ * whole reason no migration is needed.
  */
-export function migrateLegacySessionTaskFiles(cwd: string): void {
-  const legacyDir = legacySessionTasksDir(cwd);
-  let entries: string[];
-  try { entries = readdirSync(legacyDir); } catch { return; /* nothing to migrate */ }
+export function sessionTaskFile(cwd: string, sessionId: string, scope: TaskScope): string {
+  const inWorkspace = workspaceSessionTaskFile(cwd, sessionId);
+  if (scope !== "session-global") return inWorkspace;
+  return existsSync(inWorkspace) ? inWorkspace : join(globalSessionTasksDir(cwd), `tasks-${sessionId}.json`);
+}
 
-  for (const entry of entries) {
-    if (!entry.startsWith("tasks-") || !entry.endsWith(".json")) continue;
-    const destination = join(sessionTasksDir(cwd), entry);
-    try {
-      mkdirSync(dirname(destination), { recursive: true });
-      // COPYFILE_EXCL fails rather than overwriting, so the copy cannot clobber
-      // global state — and the source is only dropped once it has landed.
-      copyFileSync(join(legacyDir, entry), destination, constants.COPYFILE_EXCL);
-      unlinkSync(join(legacyDir, entry));
-    } catch { /* destination already exists, or the copy failed */ }
-  }
-
-  // Only ever removes an empty directory: a project-scope tasks.json, a stale
-  // lock or an unmigrated file all keep it, and `.pi/` itself is not ours.
-  try { rmdirSync(legacyDir); } catch { /* still holds other task state */ }
+/**
+ * Remove a workspace's global session directory once it holds nothing.
+ *
+ * Only the global tree is ever reclaimed. `<workspace>/.pi/tasks/` is left alone
+ * even when it empties, because that is what every release so far has done and
+ * `.pi/` holds project config that is not ours.
+ */
+export function reclaimGlobalSessionTasksDir(cwd: string): void {
+  try { rmdirSync(globalSessionTasksDir(cwd)); } catch { /* other sessions still stored */ }
 }

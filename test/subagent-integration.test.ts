@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
-import { legacySessionTasksDir, sessionTaskFile } from "../src/task-paths.js";
+import { sessionTaskFile, workspaceSessionTaskFile } from "../src/task-paths.js";
 import { TaskStore } from "../src/task-store.js";
 import { TaskWidget, type Theme, type UICtx } from "../src/ui/task-widget.js";
 import { installSubagentsMock, type MockEventBus, mockCtx, mockPi, mockSessionCtx } from "./helpers/mock-pi.js";
@@ -44,7 +44,7 @@ describe("Session task rehydration", () => {
   });
 
   const sessionCtx = (sessionId: string) => mockSessionCtx(sessionId, { cwd });
-  const sessionFile = (sessionId: string) => sessionTaskFile(cwd, sessionId);
+  const sessionFile = (sessionId: string) => sessionTaskFile(cwd, sessionId, "session");
 
   it("renders default session-scoped tasks immediately after reload", async () => {
     const sessionId = `reload-${process.pid}-${Date.now()}`;
@@ -182,12 +182,11 @@ describe("Workspace-scoped store resolution", () => {
     for (const dir of workspaces.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  it("namespaces global session tasks from ctx.cwd instead of the host process cwd", async () => {
+  it("namespaces session tasks by ctx.cwd instead of the host process cwd", async () => {
     const cwd = workspace("workspace");
     const sessionId = `ctx-cwd-${process.pid}-${Date.now()}`;
-    const taskFile = sessionTaskFile(cwd, sessionId);
-    const workspaceTaskFile = join(legacySessionTasksDir(cwd), `tasks-${sessionId}.json`);
-    const hostTaskFile = join(legacySessionTasksDir(process.cwd()), `tasks-${sessionId}.json`);
+    const taskFile = workspaceSessionTaskFile(cwd, sessionId);
+    const hostTaskFile = workspaceSessionTaskFile(process.cwd(), sessionId);
     delete process.env.PI_TASKS;
     const mock = mockPi();
     initExtension(mock.pi as any);
@@ -200,7 +199,6 @@ describe("Workspace-scoped store resolution", () => {
     }, ctx);
 
     expect(new TaskStore(taskFile).list().map(t => t.subject)).toEqual(["Workspace task"]);
-    expect(existsSync(workspaceTaskFile)).toBe(false);
     expect(existsSync(hostTaskFile)).toBe(false);
   });
 
@@ -220,9 +218,9 @@ describe("Workspace-scoped store resolution", () => {
     await mock.fireLifecycle("session_start", { reason: "startup" }, ctxB);
     await mock.executeTool("TaskCreate", { subject: "Workspace B", description: "d" }, ctxB);
 
-    expect(sessionTaskFile(cwdA, sessionId)).not.toBe(sessionTaskFile(cwdB, sessionId));
-    expect(new TaskStore(sessionTaskFile(cwdA, sessionId)).list().map(t => t.subject)).toEqual(["Workspace A"]);
-    expect(new TaskStore(sessionTaskFile(cwdB, sessionId)).list().map(t => t.subject)).toEqual(["Workspace B"]);
+    expect(sessionTaskFile(cwdA, sessionId, "session")).not.toBe(sessionTaskFile(cwdB, sessionId, "session"));
+    expect(new TaskStore(sessionTaskFile(cwdA, sessionId, "session")).list().map(t => t.subject)).toEqual(["Workspace A"]);
+    expect(new TaskStore(sessionTaskFile(cwdB, sessionId, "session")).list().map(t => t.subject)).toEqual(["Workspace B"]);
   });
 
   it("loads project scope from ctx.cwd and stores the shared task list there", async () => {
@@ -275,7 +273,7 @@ describe("Workspace-scoped store resolution", () => {
     await mock.fireLifecycle("session_start", { reason: "startup" }, ctxB);
     await mock.executeTool("TaskCreate", { subject: "Task B", description: "Session B" }, ctxB);
 
-    const file = (id: string) => sessionTaskFile(cwd, id);
+    const file = (id: string) => sessionTaskFile(cwd, id, "session");
     expect(new TaskStore(file(sessionA)).list().map(t => t.subject)).toEqual(["Task A"]);
     expect(new TaskStore(file(sessionB)).list().map(t => t.subject)).toEqual(["Task B"]);
   });
