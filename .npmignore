@@ -1,6 +1,7 @@
 # Development files
 tsconfig.json
 biome.json
+vitest.config.ts
 .vscode/
 .git/
 .gitignore

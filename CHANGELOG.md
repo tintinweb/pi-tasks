@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`taskScope: "session-global"` — per-session tasks kept outside the workspace.** Session scope writes `.pi/tasks/tasks-<sessionId>.json` into the workspace, so every repository pi runs in picks up an untracked directory holding a file keyed by a session ID: data of no use to anyone else cloning it, and one more `.gitignore` rule per project. The new scope keeps the same per-session isolation but stores the file at `<agent-dir>/tasks/sessions/<project-key>/tasks-<sessionId>.json` (`~/.pi/agent/tasks/…` by default, following pi's configured agent path like every other piece of user-level state), where `<project-key>` encodes the workspace path the way pi encodes it for its own session logs (`--Users-me-work-repo--`), so a project's tasks sit under the same name as its transcripts and same-ID sessions in different workspaces stay apart.
+
+  **`session` remains the default and is unchanged** — upgrading moves nothing. Opting in is non-destructive too: it only changes where *new* session files are created, and a session that already has a file in `<workspace>/.pi/tasks/` keeps using it, so switching back strands nothing. ([#61](https://github.com/tintinweb/pi-tasks/pull/61) — thanks [@kunaaal13](https://github.com/kunaaal13) — for [#53](https://github.com/tintinweb/pi-tasks/issues/53) — thanks [@rfgamaral](https://github.com/rfgamaral) — and [#57](https://github.com/tintinweb/pi-tasks/issues/57))
+
+### Fixed
+- **The test suite no longer reads or writes the real `~/.pi/`.** Shared named lists and the global `tasks-config.json` both resolve from the home directory, so the suite left files in the home directory of whoever ran it and picked up their global settings. `HOME` now points at a scratch directory for the duration of the run, and `PI_CODING_AGENT_DIR` is cleared — `getAgentDir()` consults it first, so redirecting the home directory alone would not have contained a contributor who has it set.
+- **`vitest.config.ts` is no longer published to npm.** It refers to `test/`, which `.npmignore` excludes, so the tarball carried a config file pointing at files that were not there.
+
 ## [0.8.0] - 2026-08-16
 
 ### Added

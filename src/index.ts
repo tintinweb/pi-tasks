@@ -29,6 +29,7 @@ import {
   resetCadenceState,
 } from "./reminder-cadence.js";
 import { resolveTaskGlyphs } from "./task-glyphs.js";
+import { reclaimGlobalSessionTasksDir, sessionTaskFile } from "./task-paths.js";
 import { TaskStore } from "./task-store.js";
 import { loadGlobalTasksConfig, loadTasksConfig } from "./tasks-config.js";
 import type { Task } from "./types.js";
@@ -133,6 +134,10 @@ export default function (pi: ExtensionAPI) {
   const piTasks = process.env.PI_TASKS;
   let taskScope = cfg.taskScope ?? "session";
 
+  /** Both session scopes persist one file per session; they differ only in where it
+   *  lives, so every lifecycle rule about session files applies to each of them. */
+  const isSessionScope = () => taskScope === "session" || taskScope === "session-global";
+
   /** Resolve both the backing path and a stable identity for the active store. */
   function resolveStoreTarget(cwd?: string, sessionId?: string): { key: string; path?: string } {
     if (piTasks === "off") return { key: "memory:env" };
@@ -144,11 +149,11 @@ export default function (pi: ExtensionAPI) {
     if (piTasks) return { key: `named:${piTasks}`, path: piTasks };
     if (taskScope === "memory") return { key: "memory:config" };
     if (!cwd) return { key: "pending:workspace" };
-    if (taskScope === "session" && sessionId) {
-      const path = join(cwd, ".pi", "tasks", `tasks-${sessionId}.json`);
+    if (isSessionScope() && sessionId) {
+      const path = sessionTaskFile(cwd, sessionId, taskScope);
       return { key: `path:${path}`, path };
     }
-    if (taskScope === "session") return { key: "pending:session" };
+    if (isSessionScope()) return { key: "pending:session" };
     const path = join(cwd, ".pi", "tasks", "tasks.json");
     return { key: `path:${path}`, path };
   }
@@ -365,7 +370,7 @@ export default function (pi: ExtensionAPI) {
     // ID alone would write tasks-<id>.json for a session that can never be resumed
     // and is orphaned the moment pi exits: if pi is not persisting the conversation,
     // don't persist the task list either.
-    const sessionId = taskScope === "session" && !piTasks && ctx.sessionManager.getSessionFile()
+    const sessionId = isSessionScope() && !piTasks && ctx.sessionManager.getSessionFile()
       ? ctx.sessionManager.getSessionId()
       : undefined;
     const nextTarget = resolveStoreTarget(ctx.cwd, sessionId);
@@ -378,6 +383,17 @@ export default function (pi: ExtensionAPI) {
       agentsReattached = false;
     }
     configuredCwd = ctx.cwd;
+  }
+
+  /** Delete an emptied session file, and — under `session-global` only — the
+   *  directory that held it once its last session is gone. Nothing else is ours
+   *  to reclaim: a PI_TASKS path can point anywhere, and `<workspace>/.pi/tasks/`
+   *  is left standing exactly as it always has been. */
+  function deleteSessionFileIfEmpty() {
+    if (!store.deleteFileIfEmpty()) return;
+    if (taskScope === "session-global" && !piTasks && configuredCwd) {
+      reclaimGlobalSessionTasksDir(configuredCwd);
+    }
   }
 
   /** Re-link persisted in-progress tasks to the subagents still running for them.
@@ -411,7 +427,7 @@ export default function (pi: ExtensionAPI) {
     if (tasks.length > 0) {
       if (!isResume && tasks.every(t => t.status === "completed")) {
         store.clearCompleted();
-        if (taskScope === "session") store.deleteFileIfEmpty();
+        if (isSessionScope()) deleteSessionFileIfEmpty();
       } else {
         widget.update();
       }
@@ -433,7 +449,7 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui as UICtx);
     initializeStoreForContext(ctx);
     if (autoClear.onTurnStart(cadence.currentTurn)) {
-      if (taskScope === "session") store.deleteFileIfEmpty();
+      if (isSessionScope()) deleteSessionFileIfEmpty();
       widget.update();
     }
   });
@@ -606,7 +622,7 @@ Use this tool proactively in these scenarios:
 - Non-trivial and complex tasks - Tasks that require careful planning or multiple operations
 - Plan mode - When using plan mode, create a task list to track the work
 - User explicitly requests todo list - When the user directly asks you to use the todo list
-- User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)
+- User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated). Create them all in one response with one TaskCreate call per task
 - After receiving new instructions - Immediately capture user requirements as tasks
 - When you start working on a task - Mark it as in_progress BEFORE beginning work
 - After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation
@@ -635,7 +651,8 @@ All tasks are created with status \`pending\`.
 - Include enough detail in the description for another agent to understand and complete the task
 - After creating tasks, use TaskUpdate to set up dependencies (blocks/blockedBy) if needed
 - Check TaskList first to avoid creating duplicate tasks
-- Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute`,
+- Include \`agentType\` (e.g., "general-purpose", "Explore") to mark tasks for subagent execution via TaskExecute
+- To create several tasks at once, call TaskCreate multiple times in a single response — independent tool calls run in parallel, so the whole batch is created in one turn (one task per call).`,
     promptGuidelines: [
       "When working on complex multi-step tasks, use TaskCreate to track progress and TaskUpdate to update status.",
       "Mark tasks as in_progress before starting work and completed when done.",
@@ -1210,12 +1227,12 @@ Set up task dependencies:
           await settingsMenu();
         } else if (choice.startsWith("Clear completed")) {
           store.clearCompleted();
-          if (taskScope === "session") store.deleteFileIfEmpty();
+          if (isSessionScope()) deleteSessionFileIfEmpty();
           widget.update();
           await mainMenu();
         } else if (choice.startsWith("Clear all")) {
           store.clearAll();
-          if (taskScope === "session") store.deleteFileIfEmpty();
+          if (isSessionScope()) deleteSessionFileIfEmpty();
           widget.update();
           await mainMenu();
         }

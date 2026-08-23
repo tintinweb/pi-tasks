@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
+import { sessionTaskFile } from "../src/task-paths.js";
 import { mockPi, mockSessionCtx } from "./helpers/mock-pi.js";
 
 const config = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
@@ -34,7 +35,7 @@ afterEach(() => {
 });
 
 const ctxFor = (sessionId = "s1") => mockSessionCtx(sessionId, { cwd });
-const sessionFile = (sessionId: string) => join(cwd, ".pi", "tasks", `tasks-${sessionId}.json`);
+const sessionFile = (sessionId: string) => sessionTaskFile(cwd, sessionId, "session");
 
 type Mock = ReturnType<typeof mockPi>;
 
@@ -166,5 +167,8 @@ describe("auto-clear across batches", () => {
     for (let i = 0; i < 5; i++) await mock.fireLifecycle("turn_start", {}, ctx);
 
     expect(existsSync(sessionFile("s1"))).toBe(false);
+    // Only the file goes. `.pi/tasks/` is left standing, as every release so far
+    // has left it — `.pi/` holds project config that is not ours to remove.
+    expect(existsSync(join(cwd, ".pi", "tasks"))).toBe(true);
   });
 });

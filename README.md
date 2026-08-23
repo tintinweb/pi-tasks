@@ -220,11 +220,24 @@ Task storage is controlled by the `taskScope` setting (`/tasks` → Settings →
 |------|------|-----------|
 | `memory` | *(none)* | In-memory only — tasks lost when session ends |
 | `session` **(default)** | `<workspace>/.pi/tasks/tasks-<sessionId>.json` | Per-session file — isolated between sessions, survives resume |
+| `session-global` | `<agent-dir>/tasks/sessions/<project-key>/tasks-<sessionId>.json` | The same, kept outside the workspace so repositories stay clean |
 | `project` | `<workspace>/.pi/tasks/tasks.json` | Shared across all sessions in the project |
 
 `<workspace>` is the directory pi reports for the session — the same one its file tools operate in. That is normally where you started pi; it differs only when a session is opened by an explicit path from another project, or when a host serves sessions from elsewhere.
 
-Under `session` scope, tasks stay in memory whenever pi is not persisting the session (`pi --no-session`) — there is no session for the file to belong to, so none is written. `project` scope still writes its shared list, since that belongs to the project rather than the session.
+`session-global` exists because a per-session file keyed by a session ID is runtime state, not project content: it means nothing to anyone else who clones the repository, and it costs a `.gitignore` rule per project. `<agent-dir>` is `~/.pi/agent` unless pi is configured otherwise, the same directory the [global settings](#global-defaults) live in. `<project-key>` encodes the workspace path the way pi encodes it for its own session logs (`/Users/me/work/repo` → `--Users-me-work-repo--`), so a project's task files sit under the same name as its transcripts and same-ID sessions in different workspaces cannot collide.
+
+Under either session scope, tasks stay in memory whenever pi is not persisting the session (`pi --no-session`) — there is no session for the file to belong to, so none is written. `project` scope still writes its shared list, since that belongs to the project rather than the session.
+
+Switching to `session-global` never moves or deletes anything. It changes where *new* session files are created; a session that already has a file in `<workspace>/.pi/tasks/` keeps using it, so resuming that session still finds its tasks and switching back to `session` strands nothing. To empty an existing `.pi/tasks/`, clear those sessions' tasks as usual — the file is removed once its list is empty.
+
+Picking `session-global` from `/tasks` → Settings saves it as a *project* override in `<workspace>/.pi/tasks-config.json`, so that repository still gets a `.pi/` — holding config rather than task data. To apply it everywhere and leave repositories alone, set it once as a [global default](#global-defaults) instead:
+
+```json
+{
+  "taskScope": "session-global"
+}
+```
 
 On new session start, if all persisted tasks are completed they are auto-cleared for a clean slate. On session resume, all tasks (including completed) are shown so the user can review progress. Empty session files are automatically deleted when all tasks are cleared.
 
