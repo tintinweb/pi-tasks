@@ -31,7 +31,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.PI_TASKS;
-  rmSync(sessionTasksDir(cwd), { recursive: true, force: true });
   rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -168,5 +167,8 @@ describe("auto-clear across batches", () => {
     for (let i = 0; i < 5; i++) await mock.fireLifecycle("turn_start", {}, ctx);
 
     expect(existsSync(sessionFile("s1"))).toBe(false);
+    // Global storage would otherwise grow an empty directory per workspace ever
+    // opened, since nothing else ever revisits them.
+    expect(existsSync(sessionTasksDir(cwd))).toBe(false);
   });
 });

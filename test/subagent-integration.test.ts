@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
-import { legacySessionTaskFile, sessionTaskFile, sessionTasksDir } from "../src/task-paths.js";
+import { legacySessionTasksDir, sessionTaskFile } from "../src/task-paths.js";
 import { TaskStore } from "../src/task-store.js";
 import { TaskWidget, type Theme, type UICtx } from "../src/ui/task-widget.js";
 import { installSubagentsMock, type MockEventBus, mockCtx, mockPi, mockSessionCtx } from "./helpers/mock-pi.js";
@@ -40,7 +40,6 @@ describe("Session task rehydration", () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
-    rmSync(sessionTasksDir(cwd), { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -180,18 +179,15 @@ describe("Workspace-scoped store resolution", () => {
   };
 
   afterEach(() => {
-    for (const dir of workspaces.splice(0)) {
-      rmSync(sessionTasksDir(dir), { recursive: true, force: true });
-      rmSync(dir, { recursive: true, force: true });
-    }
+    for (const dir of workspaces.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
   it("namespaces global session tasks from ctx.cwd instead of the host process cwd", async () => {
     const cwd = workspace("workspace");
     const sessionId = `ctx-cwd-${process.pid}-${Date.now()}`;
     const taskFile = sessionTaskFile(cwd, sessionId);
-    const workspaceTaskFile = legacySessionTaskFile(cwd, sessionId);
-    const hostTaskFile = legacySessionTaskFile(process.cwd(), sessionId);
+    const workspaceTaskFile = join(legacySessionTasksDir(cwd), `tasks-${sessionId}.json`);
+    const hostTaskFile = join(legacySessionTasksDir(process.cwd()), `tasks-${sessionId}.json`);
     delete process.env.PI_TASKS;
     const mock = mockPi();
     initExtension(mock.pi as any);

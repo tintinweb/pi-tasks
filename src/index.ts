@@ -28,7 +28,7 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
-import { migrateLegacySessionTaskFile, sessionTaskFile } from "./task-paths.js";
+import { migrateLegacySessionTaskFiles, reclaimSessionTasksDir, sessionTaskFile } from "./task-paths.js";
 import { TaskStore } from "./task-store.js";
 import { loadGlobalTasksConfig, loadTasksConfig } from "./tasks-config.js";
 import type { Task } from "./types.js";
@@ -371,7 +371,7 @@ export default function (pi: ExtensionAPI) {
     const nextTarget = resolveStoreTarget(ctx.cwd, sessionId);
     if (nextTarget.key !== storeTarget.key) {
       if (taskScope === "session" && !piTasks && sessionId) {
-        migrateLegacySessionTaskFile(ctx.cwd, sessionId);
+        migrateLegacySessionTaskFiles(ctx.cwd);
       }
       store = new TaskStore(nextTarget.path);
       widget.setStore(store);
@@ -381,6 +381,14 @@ export default function (pi: ExtensionAPI) {
       agentsReattached = false;
     }
     configuredCwd = ctx.cwd;
+  }
+
+  /** Delete an emptied session file, and the workspace directory that held it
+   *  once its last session is gone. Only default session storage is ours to
+   *  reclaim — a PI_TASKS path can point anywhere, and that parent is not. */
+  function deleteSessionFileIfEmpty() {
+    if (!store.deleteFileIfEmpty()) return;
+    if (!piTasks && configuredCwd) reclaimSessionTasksDir(configuredCwd);
   }
 
   /** Re-link persisted in-progress tasks to the subagents still running for them.
@@ -414,7 +422,7 @@ export default function (pi: ExtensionAPI) {
     if (tasks.length > 0) {
       if (!isResume && tasks.every(t => t.status === "completed")) {
         store.clearCompleted();
-        if (taskScope === "session") store.deleteFileIfEmpty();
+        if (taskScope === "session") deleteSessionFileIfEmpty();
       } else {
         widget.update();
       }
@@ -436,7 +444,7 @@ export default function (pi: ExtensionAPI) {
     widget.setUICtx(ctx.ui as UICtx);
     initializeStoreForContext(ctx);
     if (autoClear.onTurnStart(cadence.currentTurn)) {
-      if (taskScope === "session") store.deleteFileIfEmpty();
+      if (taskScope === "session") deleteSessionFileIfEmpty();
       widget.update();
     }
   });
@@ -1213,12 +1221,12 @@ Set up task dependencies:
           await settingsMenu();
         } else if (choice.startsWith("Clear completed")) {
           store.clearCompleted();
-          if (taskScope === "session") store.deleteFileIfEmpty();
+          if (taskScope === "session") deleteSessionFileIfEmpty();
           widget.update();
           await mainMenu();
         } else if (choice.startsWith("Clear all")) {
           store.clearAll();
-          if (taskScope === "session") store.deleteFileIfEmpty();
+          if (taskScope === "session") deleteSessionFileIfEmpty();
           widget.update();
           await mainMenu();
         }

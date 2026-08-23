@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Session task files live outside the project.** Session scope wrote `.pi/tasks/tasks-<sessionId>.json` into the workspace, so every repository pi ran in picked up an untracked directory holding a file keyed by a session ID — data of no use to anyone else cloning it, and one more `.gitignore` rule per project. Those files now go to `<agent-dir>/tasks/sessions/<project-key>/` (`~/.pi/agent/tasks/…` by default, following pi's configured agent path like every other piece of user-level state), where `<project-key>` encodes the workspace path the way pi encodes it for its own session logs (`--Users-me-work-repo--`), so a project's tasks sit under the same name as its transcripts and same-ID sessions in different workspaces stay apart. `project` scope is unchanged — a shared list belongs to the project — and so is every `PI_TASKS` override, including relative paths, which still resolve from the session's workspace.
+
+  Existing files are migrated the first time pi opens a session in that workspace, sweeping the whole directory rather than only the session being opened: sessions that are never resumed would otherwise keep `.pi/tasks/` alive forever. A project-scope `tasks.json` stays where it is, and so does any file whose destination already exists — that copy belongs to a session that has run since the move. `.pi/tasks/` is removed once nothing is left in it; the `.pi/` above it is left alone. ([#61](https://github.com/tintinweb/pi-tasks/pull/61) — thanks [@kunaaal13](https://github.com/kunaaal13) — reported in [#53](https://github.com/tintinweb/pi-tasks/issues/53) — thanks [@rfgamaral](https://github.com/rfgamaral) — and [#57](https://github.com/tintinweb/pi-tasks/issues/57))
+
+- **Shared named lists follow pi's configured agent path.** `PI_TASKS=sprint-1` resolved to a hardcoded `~/.pi/tasks/sprint-1.json`, ignoring `$PI_CODING_AGENT_DIR`; new lists are created under `<agent-dir>/tasks/` instead. A list already held at the old location keeps being read there, so nothing has to be moved and no list is stranded behind a name that still resolves.
+
+### Fixed
+- **An emptied session directory is removed along with the file in it.** Global storage would otherwise accumulate one empty directory per workspace ever opened, since nothing revisits a workspace whose tasks are gone.
+- **The test suite no longer reads or writes the real `~/.pi/`.** Session files, shared named lists and global `tasks-config.json` all resolve from the home directory, so the suite left files in the home directory of whoever ran it and picked up their global settings. `HOME` now points at a scratch directory for the duration of the run, and `PI_CODING_AGENT_DIR` is cleared — `getAgentDir()` consults it first, so redirecting the home directory alone would not have contained a contributor who has it set.
+
 ## [0.8.0] - 2026-08-16
 
 ### Added

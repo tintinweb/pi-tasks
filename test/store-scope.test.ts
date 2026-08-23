@@ -11,11 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
-import {
-  sessionTaskFile as globalSessionTaskFile,
-  legacySessionTaskFile,
-  sessionTasksDir,
-} from "../src/task-paths.js";
+import { sessionTaskFile as globalSessionTaskFile, legacySessionTasksDir } from "../src/task-paths.js";
 import { TaskStore } from "../src/task-store.js";
 import { mockPi, mockSessionCtx } from "./helpers/mock-pi.js";
 
@@ -37,7 +33,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.PI_TASKS;
-  rmSync(sessionTasksDir(cwd), { recursive: true, force: true });
   rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -222,8 +217,38 @@ describe("session_start with a persisted list", () => {
     expect(ctx.ui.setWidget).toHaveBeenCalled();
   });
 
+  it("migrates every leftover session file, not just the one being opened", async () => {
+    // The sessions that left the other files behind may never be resumed, and
+    // .pi/tasks/ only stops existing in the repository once they are all gone.
+    const legacyDir = legacySessionTasksDir(cwd);
+    new TaskStore(join(legacyDir, "tasks-s1.json")).create("Opened session", "d");
+    new TaskStore(join(legacyDir, "tasks-s9.json")).create("Abandoned session", "d");
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("session_start", { reason: "resume" }, ctxFor("s1"));
+
+    expect(new TaskStore(sessionFile("s9")).list().map(t => t.subject)).toEqual(["Abandoned session"]);
+    expect(existsSync(legacyDir)).toBe(false);
+  });
+
+  it("leaves a project-scope task list where it belongs", async () => {
+    // tasks.json is shared project state, not session state — migrating it would
+    // silently move a list the project scope still expects to find in the repo.
+    const legacyDir = legacySessionTasksDir(cwd);
+    new TaskStore(join(legacyDir, "tasks.json")).create("Shared list", "d");
+    new TaskStore(join(legacyDir, "tasks-s1.json")).create("Session task", "d");
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("session_start", { reason: "resume" }, ctxFor("s1"));
+
+    expect(existsSync(join(legacyDir, "tasks.json"))).toBe(true);
+    expect(existsSync(join(legacyDir, "tasks-s1.json"))).toBe(false);
+  });
+
   it("lazily migrates the matching legacy workspace file", async () => {
-    const legacyFile = legacySessionTaskFile(cwd, "s1");
+    const legacyFile = join(legacySessionTasksDir(cwd), "tasks-s1.json");
     new TaskStore(legacyFile).create("Legacy task", "d");
     const mock = mockPi();
     initExtension(mock.pi as any);
@@ -232,11 +257,11 @@ describe("session_start with a persisted list", () => {
 
     expect(new TaskStore(sessionFile("s1")).list().map(t => t.subject)).toEqual(["Legacy task"]);
     expect(existsSync(legacyFile)).toBe(false);
-    expect(existsSync(join(cwd, ".pi"))).toBe(false);
+    expect(existsSync(legacySessionTasksDir(cwd))).toBe(false);
   });
 
   it("keeps a legacy file when global state already exists", async () => {
-    const legacyFile = legacySessionTaskFile(cwd, "s1");
+    const legacyFile = join(legacySessionTasksDir(cwd), "tasks-s1.json");
     new TaskStore(legacyFile).create("Legacy task", "d");
     new TaskStore(sessionFile("s1")).create("Global task", "d");
     const mock = mockPi();

@@ -218,14 +218,14 @@ Task storage is controlled by the `taskScope` setting (`/tasks` → Settings →
 | Mode | File | Behaviour |
 |------|------|-----------|
 | `memory` | *(none)* | In-memory only — tasks lost when session ends |
-| `session` **(default)** | `~/.pi/tasks/sessions/<project-key>/tasks-<sessionId>.json` | Per-session file — isolated between workspaces and sessions, survives resume |
+| `session` **(default)** | `<agent-dir>/tasks/sessions/<project-key>/tasks-<sessionId>.json` | Per-session file — isolated between workspaces and sessions, survives resume |
 | `project` | `<workspace>/.pi/tasks/tasks.json` | Shared across all sessions in the project |
 
-`<workspace>` is the directory pi reports for the session — the same one its file tools operate in. That is normally where you started pi; it differs only when a session is opened by an explicit path from another project, or when a host serves sessions from elsewhere. `<project-key>` is a SHA-256 digest of that workspace path, keeping runtime metadata outside the project while preventing same-ID sessions in different workspaces from colliding.
+`<workspace>` is the directory pi reports for the session — the same one its file tools operate in. That is normally where you started pi; it differs only when a session is opened by an explicit path from another project, or when a host serves sessions from elsewhere. `<agent-dir>` is `~/.pi/agent` unless pi is configured otherwise, the same directory the [global settings](#global-defaults) live in. `<project-key>` encodes the workspace path the way pi encodes it for its own session logs (`/Users/me/work/repo` → `--Users-me-work-repo--`), so a project's task files sit under the same name as its transcripts and same-ID sessions in different workspaces cannot collide.
 
 Under `session` scope, tasks stay in memory whenever pi is not persisting the session (`pi --no-session`) — there is no session for the file to belong to, so none is written. `project` scope still writes its shared list, since that belongs to the project rather than the session.
 
-Existing default session files under `<workspace>/.pi/tasks/` migrate lazily when their session is opened. Migration never overwrites a global destination that already exists; in that conflict case the global file is used and the legacy file is left untouched. Successfully migrated files and empty legacy directories are removed.
+Session files left in `<workspace>/.pi/tasks/` by earlier versions are migrated the first time pi opens a session in that workspace. The whole directory is swept, not just the session being opened — sessions that are never resumed would otherwise keep the directory alive forever. A project-scope `tasks.json` is not session state and stays where it is; so does any file whose destination already exists, since that copy belongs to a session that has run since the move. `.pi/tasks/` is removed once nothing is left in it.
 
 On new session start, if all persisted tasks are completed they are auto-cleared for a clean slate. On session resume, all tasks (including completed) are shown so the user can review progress. Empty session files are automatically deleted when all tasks are cleared.
 
@@ -266,7 +266,7 @@ See [Customizing the task widget](CUSTOMIZING.md#where-config-lives) for worked 
 | Variable | Value | Behaviour |
 |----------|-------|-----------|
 | `PI_TASKS` | `off` | In-memory only (CI/automation) |
-| `PI_TASKS` | `sprint-1` | Named shared list at `~/.pi/tasks/sprint-1.json` |
+| `PI_TASKS` | `sprint-1` | Named shared list at `<agent-dir>/tasks/sprint-1.json` |
 | `PI_TASKS` | `/abs/path/tasks.json` | Explicit absolute file path |
 | `PI_TASKS` | `./tasks.json` | Relative path resolved from the session workspace |
 | *(unset)* | | Uses `taskScope` setting (default: `session`) |
