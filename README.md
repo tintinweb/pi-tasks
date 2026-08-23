@@ -218,12 +218,14 @@ Task storage is controlled by the `taskScope` setting (`/tasks` → Settings →
 | Mode | File | Behaviour |
 |------|------|-----------|
 | `memory` | *(none)* | In-memory only — tasks lost when session ends |
-| `session` **(default)** | `<workspace>/.pi/tasks/tasks-<sessionId>.json` | Per-session file — isolated between sessions, survives resume |
+| `session` **(default)** | `~/.pi/tasks/sessions/<project-key>/tasks-<sessionId>.json` | Per-session file — isolated between workspaces and sessions, survives resume |
 | `project` | `<workspace>/.pi/tasks/tasks.json` | Shared across all sessions in the project |
 
-`<workspace>` is the directory pi reports for the session — the same one its file tools operate in. That is normally where you started pi; it differs only when a session is opened by an explicit path from another project, or when a host serves sessions from elsewhere.
+`<workspace>` is the directory pi reports for the session — the same one its file tools operate in. That is normally where you started pi; it differs only when a session is opened by an explicit path from another project, or when a host serves sessions from elsewhere. `<project-key>` is a SHA-256 digest of that workspace path, keeping runtime metadata outside the project while preventing same-ID sessions in different workspaces from colliding.
 
 Under `session` scope, tasks stay in memory whenever pi is not persisting the session (`pi --no-session`) — there is no session for the file to belong to, so none is written. `project` scope still writes its shared list, since that belongs to the project rather than the session.
+
+Existing default session files under `<workspace>/.pi/tasks/` migrate lazily when their session is opened. Migration never overwrites a global destination that already exists; in that conflict case the global file is used and the legacy file is left untouched. Successfully migrated files and empty legacy directories are removed.
 
 On new session start, if all persisted tasks are completed they are auto-cleared for a clean slate. On session resume, all tasks (including completed) are shown so the user can review progress. Empty session files are automatically deleted when all tasks are cleared.
 

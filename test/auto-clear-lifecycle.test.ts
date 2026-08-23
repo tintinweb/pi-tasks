@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
+import { sessionTaskFile, sessionTasksDir } from "../src/task-paths.js";
 import { mockPi, mockSessionCtx } from "./helpers/mock-pi.js";
 
 const config = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));
@@ -30,11 +31,12 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.PI_TASKS;
+  rmSync(sessionTasksDir(cwd), { recursive: true, force: true });
   rmSync(cwd, { recursive: true, force: true });
 });
 
 const ctxFor = (sessionId = "s1") => mockSessionCtx(sessionId, { cwd });
-const sessionFile = (sessionId: string) => join(cwd, ".pi", "tasks", `tasks-${sessionId}.json`);
+const sessionFile = (sessionId: string) => sessionTaskFile(cwd, sessionId);
 
 type Mock = ReturnType<typeof mockPi>;
 

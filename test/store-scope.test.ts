@@ -6,11 +6,16 @@
  * .pi/ in the real working directory holds the developer's own task list.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
+import {
+  sessionTaskFile as globalSessionTaskFile,
+  legacySessionTaskFile,
+  sessionTasksDir,
+} from "../src/task-paths.js";
 import { TaskStore } from "../src/task-store.js";
 import { mockPi, mockSessionCtx } from "./helpers/mock-pi.js";
 
@@ -32,6 +37,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.PI_TASKS;
+  rmSync(sessionTasksDir(cwd), { recursive: true, force: true });
   rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -39,7 +45,7 @@ afterEach(() => {
 const ctxFor = (sessionId = "s1", opts?: { persisted?: boolean }) =>
   mockSessionCtx(sessionId, { ...opts, cwd });
 const projectFile = () => join(cwd, ".pi", "tasks", "tasks.json");
-const sessionFile = (id: string) => join(cwd, ".pi", "tasks", `tasks-${id}.json`);
+const sessionFile = (id: string) => globalSessionTaskFile(cwd, id);
 
 describe("taskScope: project", () => {
   beforeEach(() => { config.current = { taskScope: "project" }; });
@@ -118,13 +124,14 @@ describe("taskScope: session, without a persisted session", () => {
     expect((await mock.executeTool("TaskList", {})).content[0].text).toContain("Ephemeral");
   });
 
-  it("still writes a session file when the session is persisted", async () => {
+  it("writes persisted session state globally without creating project metadata", async () => {
     const mock = mockPi();
     initExtension(mock.pi as any);
     await mock.fireLifecycle("session_start", { reason: "startup" }, ctxFor("s1"));
     await mock.executeTool("TaskCreate", { subject: "Durable", description: "d" });
 
     expect(existsSync(sessionFile("s1"))).toBe(true);
+    expect(existsSync(join(cwd, ".pi"))).toBe(false);
   });
 
   it("does not fall back to a file when a later lifecycle event fires", async () => {
@@ -170,7 +177,6 @@ describe("PI_TASKS override", () => {
 describe("session_start with a persisted list", () => {
   /** Write a session file holding tasks in the given states. */
   function seed(sessionId: string, statuses: Array<"pending" | "completed">) {
-    mkdirSync(join(cwd, ".pi", "tasks"), { recursive: true });
     const store = new TaskStore(sessionFile(sessionId));
     statuses.forEach((status, i) => {
       const task = store.create(`Task ${i + 1}`, "d");
@@ -214,5 +220,31 @@ describe("session_start with a persisted list", () => {
 
     expect(existsSync(sessionFile("s1"))).toBe(true);
     expect(ctx.ui.setWidget).toHaveBeenCalled();
+  });
+
+  it("lazily migrates the matching legacy workspace file", async () => {
+    const legacyFile = legacySessionTaskFile(cwd, "s1");
+    new TaskStore(legacyFile).create("Legacy task", "d");
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("session_start", { reason: "resume" }, ctxFor("s1"));
+
+    expect(new TaskStore(sessionFile("s1")).list().map(t => t.subject)).toEqual(["Legacy task"]);
+    expect(existsSync(legacyFile)).toBe(false);
+    expect(existsSync(join(cwd, ".pi"))).toBe(false);
+  });
+
+  it("keeps a legacy file when global state already exists", async () => {
+    const legacyFile = legacySessionTaskFile(cwd, "s1");
+    new TaskStore(legacyFile).create("Legacy task", "d");
+    new TaskStore(sessionFile("s1")).create("Global task", "d");
+    const mock = mockPi();
+    initExtension(mock.pi as any);
+
+    await mock.fireLifecycle("session_start", { reason: "resume" }, ctxFor("s1"));
+
+    expect(new TaskStore(sessionFile("s1")).list().map(t => t.subject)).toEqual(["Global task"]);
+    expect(existsSync(legacyFile)).toBe(true);
   });
 });

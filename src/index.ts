@@ -28,6 +28,7 @@ import {
   onTurnStart,
   resetCadenceState,
 } from "./reminder-cadence.js";
+import { migrateLegacySessionTaskFile, sessionTaskFile } from "./task-paths.js";
 import { TaskStore } from "./task-store.js";
 import { loadGlobalTasksConfig, loadTasksConfig } from "./tasks-config.js";
 import type { Task } from "./types.js";
@@ -144,7 +145,7 @@ export default function (pi: ExtensionAPI) {
     if (taskScope === "memory") return { key: "memory:config" };
     if (!cwd) return { key: "pending:workspace" };
     if (taskScope === "session" && sessionId) {
-      const path = join(cwd, ".pi", "tasks", `tasks-${sessionId}.json`);
+      const path = sessionTaskFile(cwd, sessionId);
       return { key: `path:${path}`, path };
     }
     if (taskScope === "session") return { key: "pending:session" };
@@ -369,6 +370,9 @@ export default function (pi: ExtensionAPI) {
       : undefined;
     const nextTarget = resolveStoreTarget(ctx.cwd, sessionId);
     if (nextTarget.key !== storeTarget.key) {
+      if (taskScope === "session" && !piTasks && sessionId) {
+        migrateLegacySessionTaskFile(ctx.cwd, sessionId);
+      }
       store = new TaskStore(nextTarget.path);
       widget.setStore(store);
       storeTarget = nextTarget;
