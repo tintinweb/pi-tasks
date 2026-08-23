@@ -827,6 +827,16 @@ describe("configurable glyphs", () => {
     expect(lines[2]).toContain("◻");
     expect(renderWidget(ui.state)[3].trim().split(" ")[0]).toBe("✳");
   });
+
+  it("never lets a glyph carry a control character into a rendered line", () => {
+    // The threat model is a tasks-config.json that arrived with a cloned repository:
+    // the newline would split a widget line in two, the OSC sequence would retitle
+    // the terminal. Both fall back, like any other unusable glyph.
+    const lines = seed({ pending: "X\n\u001b]0;pwned\u0007" });
+
+    expect(lines[2]).toContain("◻ #2 Open task");
+    expect(lines.join("")).not.toMatch(/\p{Cc}/u);
+  });
 });
 
 describe("spinner animation timing", () => {

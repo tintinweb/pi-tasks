@@ -66,11 +66,19 @@ const DEFAULT_GLYPHS: Omit<TaskGlyphs, "completedSummary"> = {
   truncation: "...",
 };
 
-/** A frame may be any non-empty string, not just one glyph — `⣾⣾`, `..` and an
- *  emoji with a variation selector are all valid frames. */
+/** Control characters would break the widget's one-line-per-entry contract or steer
+ *  the terminal itself (a glyph carrying `ESC ]0;…` retitles the window), and bidi
+ *  overrides reorder the line around the glyph. A `tasks-config.json` that arrived
+ *  with a cloned repository must not be able to do either. */
+const UNSAFE_GLYPH = /[\p{Cc}\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+
+/** A glyph may be any non-empty string, not just one character — `[x]`, `⣾⣾` and an
+ *  emoji with a variation selector are all valid, as glyphs and as spinner frames. */
+const isGlyph = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0 && !UNSAFE_GLYPH.test(value);
+
 function isSpinner(value: unknown): value is string[] {
-  return Array.isArray(value) && value.length > 0
-    && value.every(frame => typeof frame === "string" && frame.length > 0);
+  return Array.isArray(value) && value.length > 0 && value.every(isGlyph);
 }
 
 /** Resolve configured glyphs against the defaults. Never throws and never rejects
@@ -78,8 +86,7 @@ function isSpinner(value: unknown): value is string[] {
  *  widget. Each glyph falls back on its own; the spinner falls back as a whole,
  *  because half a frame sequence is not an animation. */
 export function resolveTaskGlyphs(glyphs: TaskGlyphsConfig | undefined): TaskGlyphs {
-  const glyph = (value: unknown, fallback: string) =>
-    typeof value === "string" && value.length > 0 ? value : fallback;
+  const glyph = (value: unknown, fallback: string) => isGlyph(value) ? value : fallback;
   const completed = glyph(glyphs?.completed, DEFAULT_GLYPHS.completed);
   const spinner = glyphs?.spinner;
   return {

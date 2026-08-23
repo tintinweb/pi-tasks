@@ -68,8 +68,40 @@ describe("resolveTaskGlyphs", () => {
     expect(glyphs.pending).toBe("[ ]");
   });
 
+  it("falls back per glyph for a control character or a bidi override", () => {
+    // A newline would break the widget's one-line-per-entry contract, an OSC sequence
+    // would retitle the terminal, and an RLO reorders the line around the glyph.
+    const defaults = resolveTaskGlyphs(undefined);
+    const glyphs = resolveTaskGlyphs({
+      completed: "X\n",
+      inProgress: "\u001b]0;pwned\u0007",
+      header: "\u007f",
+      overflow: "\u202eabc",
+      pending: "[ ]",
+    });
+
+    expect(glyphs.completed).toBe(defaults.completed);
+    expect(glyphs.inProgress).toBe(defaults.inProgress);
+    expect(glyphs.header).toBe(defaults.header);
+    expect(glyphs.overflow).toBe(defaults.overflow);
+    expect(glyphs.pending).toBe("[ ]");
+  });
+
   it("accepts a single space, which renders as spacing only", () => {
     expect(resolveTaskGlyphs({ blocked: " " }).blocked).toBe(" ");
+  });
+
+  it("accepts glyphs that are more than one character", () => {
+    // A Nerd Font glyph with the trailing space its width needs, and an emoji whose
+    // variation selector must survive the control-character check.
+    const configured = {
+      completed: "[x]",
+      inProgress: "⣾⣾",
+      pending: "🌑\uFE0F",
+      blocked: "\uE0A0 ",
+    };
+
+    expect(resolveTaskGlyphs(configured)).toMatchObject(configured);
   });
 
   describe("completedSummary", () => {
@@ -100,7 +132,7 @@ describe("resolveTaskGlyphs", () => {
 
     it("falls back as a whole when the configured sequence is unusable", () => {
       const defaults = resolveTaskGlyphs(undefined);
-      const rejected: unknown[] = [[], "✳✴", null, ["✳", 7], ["✳", ""], {}];
+      const rejected: unknown[] = [[], "✳✴", null, ["✳", 7], ["✳", ""], ["✳", "✴\u001b[2J"], {}];
 
       for (const spinner of rejected) {
         expect(resolveTaskGlyphs({ spinner } as unknown as TaskGlyphsConfig).spinner)
