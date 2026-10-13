@@ -335,14 +335,40 @@ describe("TaskExecute", () => {
     expect(result.content[0].text).toContain("#999: not found");
   });
 
-  it("rejects tasks without agentType", async () => {
+  it("defaults agentType to general-purpose so plain tasks still spawn", async () => {
     await mock.executeTool("TaskCreate", {
-      subject: "No agent type",
-      description: "Plain task",
+      subject: "Plain task",
+      description: "No agentType parameter",
     });
 
     const result = await mock.executeTool("TaskExecute", { task_ids: ["1"] });
-    expect(result.content[0].text).toContain("#1: no agentType set");
+    expect(result.content[0].text).toContain("Launched 1 agent");
+    expect(rpc.spawned).toHaveLength(1);
+    expect(rpc.spawned[0].type).toBe("general-purpose");
+  });
+
+  it("rejects legacy tasks without agentType, with a run-it-directly hint", async () => {
+    // TaskCreate defaults agentType now, so a task without it can only come from
+    // older data. Seed one directly in a store file, bypassing the tool.
+    const directory = mkdtempSync(join(tmpdir(), "pi-tasks-legacy-"));
+    const taskFile = join(directory, "tasks.json");
+    try {
+      new TaskStore(taskFile).create("Legacy task", "Created before agentType existed");
+      process.env.PI_TASKS = taskFile;
+
+      const legacyMock = mockPi();
+      const legacyRpc = installSubagentsMock(legacyMock.pi);
+      initExtension(legacyMock.pi as any);
+
+      const result = await legacyMock.executeTool("TaskExecute", { task_ids: ["1"] });
+      expect(result.content[0].text).toContain("#1: no agentType set");
+      expect(result.content[0].text).toContain("run the work directly");
+
+      legacyRpc.unsub();
+    } finally {
+      process.env.PI_TASKS = "off";
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("rejects non-pending tasks", async () => {
@@ -437,6 +463,9 @@ describe("TaskExecute", () => {
       subject: "No agent type",
       description: "Desc",
     });
+    // TaskCreate defaults agentType — strip it the documented way (metadata
+    // merge, null deletes) to reproduce the legacy no-agentType state.
+    await mock.executeTool("TaskUpdate", { taskId: "2", metadata: { agentType: null } });
 
     const result = await mock.executeTool("TaskExecute", { task_ids: ["1", "2", "999"] });
     const text = result.content[0].text;

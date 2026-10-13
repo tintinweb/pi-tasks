@@ -109,6 +109,56 @@ describe("stale in_progress task reminders", () => {
     unping();
   });
 
+  it("steers pending tasks with agentType toward TaskExecute", async () => {
+    const mock = mockPi();
+    const unping = installPingResponder(mock.pi);
+    initExtension(mock.pi as any);
+
+    // TaskCreate defaults agentType, and the task stays pending — the closing
+    // line should point at TaskExecute instead of "continue on".
+    await mock.executeTool("TaskCreate", { subject: "Delegate me", description: "Desc" });
+
+    // Pending-only list → the longer interval, so four non-task turns.
+    for (let i = 0; i < 4; i++) {
+      await mock.fireLifecycle("turn_start", {}, mockCtx());
+      await mock.fireLifecycle("tool_result", { toolName: "read" });
+    }
+    const contextResult = await mock.fireLifecycle("context", { messages: [] });
+
+    const reminder = contextResult.messages.at(-1).content[0].text;
+    expect(reminder).toContain('"content":"Delegate me"');
+    expect(reminder).toContain('"agentType":"general-purpose"');
+    expect(reminder).toContain("Pending tasks with an agentType can be started via TaskExecute");
+    expect(reminder).not.toContain("Continue on with the tasks at hand");
+
+    unping();
+  });
+
+  it("keeps the generic closing line for pending tasks without agentType", async () => {
+    const mock = mockPi();
+    const unping = installPingResponder(mock.pi);
+    initExtension(mock.pi as any);
+
+    await mock.executeTool("TaskCreate", { subject: "Legacy pending", description: "Desc" });
+    // Strip the default the documented way (metadata merge, null deletes) to
+    // reproduce a task from before agentType existed.
+    await mock.executeTool("TaskUpdate", { taskId: "1", metadata: { agentType: null } });
+
+    for (let i = 0; i < 4; i++) {
+      await mock.fireLifecycle("turn_start", {}, mockCtx());
+      await mock.fireLifecycle("tool_result", { toolName: "read" });
+    }
+    const contextResult = await mock.fireLifecycle("context", { messages: [] });
+
+    const reminder = contextResult.messages.at(-1).content[0].text;
+    expect(reminder).toContain('"status":"pending"');
+    expect(reminder).not.toContain('"agentType"');
+    expect(reminder).toContain("Continue on with the tasks at hand");
+    expect(reminder).not.toContain("Pending tasks with an agentType");
+
+    unping();
+  });
+
   it("uses a shorter reminder interval for non-task tools when a task is in_progress", async () => {
     const mock = mockPi();
     const unping = installPingResponder(mock.pi);
