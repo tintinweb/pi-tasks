@@ -20,11 +20,11 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
 
-  # The pi devDependencies pin the version this extension is developed against (0.84.2), so
+  # The pi devDependencies pin the version this extension is developed against (0.87.1), so
   # the `build` job above only proves the top of the supported range.
   #
-  # This job covers the other end: the earliest Pi the peerDependencies claim (`>=0.80.5`,
-  # the release that added the `agent_settled` extension event). It is NOT continue-on-error —
+  # This job covers the other end: the earliest Pi the peerDependencies claim (`>=0.87.0`,
+  # the release that added the `context_with_system` extension event). It is NOT continue-on-error —
   # a green run here is the only evidence behind that range, and if the floor genuinely
   # can't be supported any more, the peer range is what should change.
   compat-floor-pi:
@@ -37,7 +37,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Install floor Pi
-        run: npm install --no-save @earendil-works/pi-coding-agent@0.80.5 @earendil-works/pi-tui@0.80.5
+        run: npm install --no-save @earendil-works/pi-coding-agent@0.87.0 @earendil-works/pi-tui@0.87.0
       - name: Typecheck against floor Pi
         run: npm run typecheck
       - name: Test suite against floor Pi
@@ -46,7 +46,7 @@ jobs:
   # Forward canary: reinstall whatever Pi is `latest` over the pin, so a release newer than
   # the baseline surfaces here before it reaches users. It runs the full typecheck + suite,
   # not a hand-picked file list, so new drift can't hide in a test nobody remembered to add
-  # here. Both steps pass as of the 0.84.2 baseline — a failure IS fresh breakage.
+  # here. Both steps pass as of the 0.87.1 baseline — a failure IS fresh breakage.
   compat-latest-pi:
     runs-on: ubuntu-latest
     continue-on-error: true # current Pi is not a hard support guarantee; surface breakage without blocking

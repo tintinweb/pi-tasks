@@ -576,9 +576,12 @@ export default function (pi: ExtensionAPI) {
   // Inject the transient system-reminder into the upcoming LLM call's
   // messages, never into a tool result. The reminder is appended as a
   // user message so models that don't support custom message types still
-  // receive it. It is not persisted in the session store — `context`
+  // receive it. It is not persisted in the session store — the handler
   // returns a transformed messages array used only for this one request.
-  pi.on("context", async (event) => {
+  // `context_with_system`, not `context`: any change returned from `context`
+  // makes pi fold its mid-conversation system messages (prompt and tool
+  // updates) into the leading one, rewriting the provider's cached prefix.
+  pi.on("context_with_system", async (event) => {
     if (!drainReminderForContext(cadence)) return {};
     const tasks = store.list();
 

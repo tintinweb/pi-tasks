@@ -39,7 +39,7 @@
 
 ## Pi Compatibility
 
-The `@earendil-works/pi-*` packages are `peerDependencies` (`>=0.80.0`) and are pinned in
+The `@earendil-works/pi-*` packages are `peerDependencies` (`>=0.87.0`) and are pinned in
 `devDependencies` at the version the code is developed against. CI checks both ends of
 that range (`.github/workflows/ci.yml`):
 

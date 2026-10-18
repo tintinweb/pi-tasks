@@ -1,3 +1,4 @@
+import { ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import initExtension from "../src/index.js";
 
@@ -47,6 +48,7 @@ function mockPi() {
 
   return {
     pi,
+    lifecycleHandlers,
     tools,
     async executeTool(name: string, params: any, ctx = mockCtx()) {
       const tool = tools.get(name);
@@ -93,18 +95,49 @@ describe("stale in_progress task reminders", () => {
 
     await mock.fireLifecycle("turn_start", {}, mockCtx());
     await mock.fireLifecycle("turn_end", { message: { role: "assistant", usage: { input: 1, output: 1 } } });
-    let contextResult = await mock.fireLifecycle("context", { messages: [] });
+    let contextResult = await mock.fireLifecycle("context_with_system", { messages: [] });
     expect(contextResult).toEqual({});
 
     await mock.fireLifecycle("turn_start", {}, mockCtx());
     await mock.fireLifecycle("turn_end", { message: { role: "assistant", usage: { input: 1, output: 1 } } });
-    contextResult = await mock.fireLifecycle("context", { messages: [] });
+    contextResult = await mock.fireLifecycle("context_with_system", { messages: [] });
 
     const reminder = contextResult.messages.at(-1).content[0].text;
     expect(reminder).toContain("latest contents of your task list");
     expect(reminder).toContain('"content":"Finish stale reminder test"');
     expect(reminder).toContain('"status":"in_progress"');
     expect(reminder).toContain("Continue on with the tasks at hand");
+
+    unping();
+  });
+
+  it("keeps pi's mid-conversation system messages in place when it injects the reminder", async () => {
+    const mock = mockPi();
+    const unping = installPingResponder(mock.pi);
+    initExtension(mock.pi as any);
+
+    await mock.executeTool("TaskCreate", { subject: "Keep the prompt cache", description: "Desc" });
+    await mock.executeTool("TaskUpdate", { taskId: "1", status: "in_progress" });
+    for (let i = 0; i < 2; i++) {
+      await mock.fireLifecycle("turn_start", {}, mockCtx());
+      await mock.fireLifecycle("turn_end", { message: { role: "assistant", usage: { input: 1, output: 1 } } });
+    }
+
+    // Drive pi's real context dispatch: a changed `context` result would fold `update` into `head`.
+    const runner = Object.create(ExtensionRunner.prototype);
+    Object.assign(runner, {
+      extensions: [{ path: "pi-tasks", handlers: mock.lifecycleHandlers }],
+      createContext: () => mockCtx(),
+      emitError: (error: { error: string }) => { throw new Error(error.error); },
+    });
+    const head = { role: "system", content: "", sections: { tools: "v1" }, timestamp: 1 };
+    const update = { role: "system", content: "", sections: { tools: "v2" }, timestamp: 3 };
+    const transcript = [head, { role: "user", content: "one", timestamp: 2 }, update, { role: "user", content: "two", timestamp: 4 }];
+    const sent = await runner.emitContext(transcript);
+
+    expect(sent.slice(0, transcript.length)).toEqual(transcript);
+    expect(sent).toHaveLength(transcript.length + 1);
+    expect(sent.at(-1).content[0].text).toContain("latest contents of your task list");
 
     unping();
   });
@@ -119,12 +152,12 @@ describe("stale in_progress task reminders", () => {
 
     await mock.fireLifecycle("turn_start", {}, mockCtx());
     await mock.fireLifecycle("tool_result", { toolName: "read" });
-    let contextResult = await mock.fireLifecycle("context", { messages: [] });
+    let contextResult = await mock.fireLifecycle("context_with_system", { messages: [] });
     expect(contextResult).toEqual({});
 
     await mock.fireLifecycle("turn_start", {}, mockCtx());
     await mock.fireLifecycle("tool_result", { toolName: "bash" });
-    contextResult = await mock.fireLifecycle("context", { messages: [] });
+    contextResult = await mock.fireLifecycle("context_with_system", { messages: [] });
 
     const reminder = contextResult.messages.at(-1).content[0].text;
     expect(reminder).toContain('"content":"Run validation"');
@@ -146,10 +179,10 @@ describe("stale in_progress task reminders", () => {
 
     await mock.fireLifecycle("turn_start", {}, mockCtx());
     await mock.fireLifecycle("turn_end", { message: { role: "assistant", usage: { input: 1, output: 1 } } });
-    await mock.fireLifecycle("context", { messages: [] });
+    await mock.fireLifecycle("context_with_system", { messages: [] });
     await mock.fireLifecycle("turn_start", {}, mockCtx());
     await mock.fireLifecycle("turn_end", { message: { role: "assistant", usage: { input: 1, output: 1 } } });
-    const contextResult = await mock.fireLifecycle("context", { messages: [] });
+    const contextResult = await mock.fireLifecycle("context_with_system", { messages: [] });
 
     const reminder = contextResult.messages.at(-1).content[0].text;
     // Exactly one closing tag — the real one; the injected tag was stripped.
@@ -173,10 +206,10 @@ describe("stale in_progress task reminders", () => {
 
     await mock.fireLifecycle("turn_start", {}, mockCtx());
     await mock.fireLifecycle("turn_end", { message: { role: "assistant", usage: { input: 1, output: 1 } } });
-    await mock.fireLifecycle("context", { messages: [] });
+    await mock.fireLifecycle("context_with_system", { messages: [] });
     await mock.fireLifecycle("turn_start", {}, mockCtx());
     await mock.fireLifecycle("turn_end", { message: { role: "assistant", usage: { input: 1, output: 1 } } });
-    const contextResult = await mock.fireLifecycle("context", { messages: [] });
+    const contextResult = await mock.fireLifecycle("context_with_system", { messages: [] });
 
     const reminder = contextResult.messages.at(-1).content[0].text;
     const echoed = JSON.parse(reminder.match(/\[.*\]/)![0]);
@@ -212,7 +245,7 @@ describe("stale in_progress task reminders", () => {
     const answers: Array<string | undefined> = ["Clear all (1)", undefined];
     await mock.runCommand("tasks", { select: async () => answers.shift(), input: async () => undefined });
 
-    const contextResult = await mock.fireLifecycle("context", { messages: [] });
+    const contextResult = await mock.fireLifecycle("context_with_system", { messages: [] });
     const reminder = contextResult.messages.at(-1).content[0].text;
     expect(reminder).toContain("your task list is currently empty");
     expect(reminder).not.toContain("latest contents of your task list");

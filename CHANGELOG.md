@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The task reminder no longer rewrites the provider's cached system prompt.** pi sends mid-session prompt and tool changes as separate system messages, so models that accept them keep the cached prefix. When a `context` handler returns changed messages, pi folds those messages into the leading system prompt. The reminder used to be injected from `context`, so every reminder request missed the prompt cache in a session whose prompt or tool set had changed. It is now injected from `context_with_system`, which leaves pi's system messages in place.
+
+### Changed
+- **Requires pi 0.87.0 or newer** (the release that added `context_with_system`). The `peerDependencies` floor moves from 0.80.5 to 0.87.0, and the development pin from 0.84.2 to 0.87.1.
+
 ## [0.9.1] - 2026-10-13
 
 ### Fixed
