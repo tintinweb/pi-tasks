@@ -84,6 +84,8 @@ export class TaskWidget {
   private activeTaskIds = new Set<string>();
   /** Per-task runtime metrics keyed by task ID. */
   private metrics = new Map<string, TaskMetrics>();
+  /** Turns already counted, by key, so a duplicate delivery counts once. */
+  private countedTurns = new Set<string>();
   /** Cached TUI instance for requestRender() calls. */
   private tui: any | undefined;
   /** Whether the widget callback is currently registered. */
@@ -116,8 +118,23 @@ export class TaskWidget {
     this.update();
   }
 
-  /** Record token usage for the currently active task(s). */
-  addTokenUsage(inputTokens: number, outputTokens: number) {
+  /**
+   * Record token usage for the currently active task(s).
+   *
+   * A turn is counted once. The same turn delivered twice — an agent event re-emitted after a
+   * reload, a session replayed — used to add its tokens twice, and the error was permanent:
+   * nothing recomputes a metric, so every later total carried the double count.
+   */
+  addTokenUsage(inputTokens: number, outputTokens: number, turnKey?: string) {
+    if (turnKey) {
+      if (this.countedTurns.has(turnKey)) return;
+      this.countedTurns.add(turnKey);
+      // Bounded: the keys guard against a duplicate delivery, not against history.
+      if (this.countedTurns.size > 2000) {
+        const oldest = this.countedTurns.values().next().value;
+        if (oldest !== undefined) this.countedTurns.delete(oldest);
+      }
+    }
     // Distribute to all currently active tasks
     for (const id of this.activeTaskIds) {
       const m = this.metrics.get(id);
@@ -126,6 +143,13 @@ export class TaskWidget {
         m.outputTokens += outputTokens;
       }
     }
+  }
+
+  /** A session switch: task IDs restart at 1, so nothing counted for the old one carries over. */
+  resetSession() {
+    this.activeTaskIds.clear();
+    this.metrics.clear();
+    this.countedTurns.clear();
   }
 
   /** Ensure the widget update timer is running. The spinner advances here and

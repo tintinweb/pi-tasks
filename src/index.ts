@@ -525,7 +525,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("turn_end", async (event) => {
     const msg = event.message as any;
     if (msg?.role === "assistant" && msg.usage) {
-      widget.addTokenUsage(msg.usage.input ?? 0, msg.usage.output ?? 0);
+      // The message's own identity keys the turn: an event delivered twice counts once.
+      const usage = msg.usage;
+      const key = `${msg.timestamp ?? event.turnIndex}:${usage.input ?? 0}:${usage.output ?? 0}`;
+      widget.addTokenUsage(usage.input ?? 0, usage.output ?? 0, key);
     }
 
     // Stale-task detection: catch the case where the agent finishes work in a
@@ -609,6 +612,9 @@ export default function (pi: ExtensionAPI) {
     // copy. Snapshot before the store re-points to the new (empty) session file.
     const forkSeed = reason === "fork" ? store.snapshot() : undefined;
     if (isSwitch) {
+      // A new session starts its task IDs again at 1, so a metric kept by ID would land on an unrelated
+      // task. A resume, a reload and a fork carry their tasks over and keep their counts.
+      if (reason === "new") widget.resetSession();
       persistedTasksShown = false;
       agentsReattached = false;
       // Task IDs restart at 1 in every session, so a mapping held over from the
