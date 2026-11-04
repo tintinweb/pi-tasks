@@ -23,6 +23,7 @@ export interface TasksConfig {
   maxVisible?: number;                   // default: 10
   sortOrder?: TaskSortOrder;             // default: "id"
   hiddenAt?: "top" | "bottom";                         // default: "bottom"
+  timeDisplay?: "elapsed" | "clock";                   // default: "elapsed"
   glyphs?: TaskGlyphsConfig;             // default: see task-glyphs.ts
 }
 

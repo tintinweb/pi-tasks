@@ -48,6 +48,7 @@ that project sorts by `active` (from global) and shows 5 tasks (from project).
 | `maxVisible` | `5`–`100` | `10` | Cap on task lines (ignored when `showAll` is on) |
 | `showAll` | `true` / `false` | `false` | Show every listed task regardless of `maxVisible` |
 | `hiddenAt` | `bottom` / `top` | `bottom` | Which end the `… and N more` line collapses from |
+| `timeDisplay` | `elapsed` / `clock` | `elapsed` | `elapsed` shows how long the active task has been running. `clock` shows when it started (`started 14:05`) and, on every other task, the time it was last updated (`(14:05)`, or `(11-03 14:05)` when not today) |
 | `glyphs` | a [glyph set](#task-glyphs) | `✔` / `◼` / `◻` + star spinner | The glyphs the widget is drawn with |
 
 These compose in a fixed order, which is what makes combinations predictable:

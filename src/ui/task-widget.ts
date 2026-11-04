@@ -68,6 +68,15 @@ function formatDuration(ms: number): string {
   return remMin > 0 ? `${hr}h ${remMin}m` : `${hr}h`;
 }
 
+/** Format a timestamp as a local clock time: "14:05", or "11-03 14:05" when it is not today. */
+function formatClock(ms: number): string {
+  const d = new Date(ms);
+  const now = new Date();
+  const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (d.toDateString() === now.toDateString()) return hhmm;
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${hhmm}`;
+}
+
 /** Format token count with k suffix (e.g., "4.1k", "850"). */
 function formatTokens(n: number): string {
   if (n < 1000) return String(n);
@@ -116,6 +125,25 @@ export class TaskWidget {
     this.update();
   }
 
+  /** The agent run ended: stop the spinner and clock on tasks no background agent is working on,
+   *  so an idle session does not keep counting. Tasks bound to an agent stay active until it reports. */
+  settle() {
+    for (const id of this.activeTaskIds) {
+      if (!this.store.get(id)?.metadata?.agentId) {
+        this.activeTaskIds.delete(id);
+        this.metrics.delete(id);
+      }
+    }
+    this.update();
+  }
+
+  /** A turn started: in-progress tasks without an agent are being worked on again, with a fresh clock. */
+  resume() {
+    for (const task of this.store.list()) {
+      if (task.status === "in_progress" && !task.metadata?.agentId) this.setActiveTask(task.id);
+    }
+  }
+
   /** Record token usage for the currently active task(s). */
   addTokenUsage(inputTokens: number, outputTokens: number) {
     // Distribute to all currently active tasks
@@ -157,6 +185,7 @@ export class TaskWidget {
     // Resolved per render, not cached: the extension swaps this config object's
     // contents when the host moves to a session in another workspace.
     const glyphs = resolveTaskGlyphs(this.config.glyphs);
+    const clockTime = this.config.timeDisplay === "clock";
     const tasks = this.store.list(sortOrder);
     const w = tui.terminal.columns;
     const truncate = (line: string) => truncateToWidth(line, w, glyphs.truncation);
@@ -221,6 +250,9 @@ export class TaskWidget {
         }
       }
 
+      // Clock mode: tasks that are not running show when they were last touched.
+      const updated = clockTime ? theme.fg("dim", ` (${formatClock(task.updatedAt)})`) : "";
+
       let text: string;
       if (isActive) {
         const form = task.activeForm || task.subject;
@@ -229,7 +261,7 @@ export class TaskWidget {
         const m = this.metrics.get(task.id);
         let stats = "";
         if (m) {
-          const elapsed = formatDuration(Date.now() - m.startedAt);
+          const elapsed = clockTime ? `started ${formatClock(m.startedAt)}` : formatDuration(Date.now() - m.startedAt);
           const tokenParts: string[] = [];
           if (m.inputTokens > 0) tokenParts.push(`${glyphs.inputTokens} ${formatTokens(m.inputTokens)}`);
           if (m.outputTokens > 0) tokenParts.push(`${glyphs.outputTokens} ${formatTokens(m.outputTokens)}`);
@@ -241,12 +273,12 @@ export class TaskWidget {
           theme.fg("accent", form + agentLabel + glyphs.trailingEllipsis)
         }${stats}`;
       } else if (task.status === "completed") {
-        text = `  ${statusGlyph} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}`;
+        text = `  ${statusGlyph} ${theme.fg("dim", theme.strikethrough("#" + task.id + " " + task.subject))}${updated}`;
       } else {
         const agentSuffix = task.status === "in_progress" && task.metadata?.agentId
           ? theme.fg("dim", ` (agent ${task.metadata.agentId.slice(0, 5)})`)
           : "";
-        text = `  ${statusGlyph} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}`;
+        text = `  ${statusGlyph} ${theme.fg("dim", "#" + task.id)} ${task.subject}${agentSuffix}${updated}`;
       }
 
       lines.push(truncate(text + suffix));

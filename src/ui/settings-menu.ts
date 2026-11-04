@@ -104,6 +104,15 @@ export async function openSettingsMenu(
         values: ["bottom", "top"],
       },
       {
+        id: "timeDisplay",
+        label: "Widget time display",
+        description:
+          '"elapsed" shows how long the active task has been running. ' +
+          '"clock" shows when it started, and the time of last update (date included if not today) on other tasks.',
+        currentValue: cfg.timeDisplay ?? "elapsed",
+        values: ["elapsed", "clock"],
+      },
+      {
         id: "autoClearCompleted",
         label: "Auto-clear completed tasks",
         description:
@@ -147,6 +156,10 @@ export async function openSettingsMenu(
         }
         if (id === "sortOrder") {
           cfg.sortOrder = newValue as TasksConfig["sortOrder"];
+          saveTasksConfig(cfg, cwd);
+        }
+        if (id === "timeDisplay") {
+          cfg.timeDisplay = newValue as "elapsed" | "clock";
           saveTasksConfig(cfg, cwd);
         }
         if (id === "hiddenAt") {

@@ -677,6 +677,133 @@ describe("formatDuration (via widget rendering)", () => {
   });
 });
 
+describe("idle sessions", () => {
+  let store: TaskStore;
+  let widget: TaskWidget;
+  let ui: ReturnType<typeof mockUICtx>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new TaskStore();
+    widget = new TaskWidget(store);
+    ui = mockUICtx();
+    widget.setUICtx(ui.ctx);
+  });
+
+  afterEach(() => {
+    widget.dispose();
+    vi.useRealTimers();
+  });
+
+  it("stops timing a task when the run settles", () => {
+    store.create("Task", "Desc", "Working");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1");
+    vi.advanceTimersByTime(60_000);
+
+    widget.settle();
+    vi.advanceTimersByTime(7 * 3_600_000);
+    widget.update();
+
+    const line = renderWidget(ui.state)[1];
+    expect(line).not.toContain("Working");
+    expect(line).not.toContain("7h");
+  });
+
+  it("restarts the clock from zero when the next turn starts", () => {
+    store.create("Task", "Desc", "Working");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1");
+    widget.settle();
+    vi.advanceTimersByTime(3_600_000);
+
+    widget.resume();
+    vi.advanceTimersByTime(5_000);
+    widget.update();
+
+    const line = renderWidget(ui.state)[1];
+    expect(line).toContain("Working");
+    expect(line).toContain("5s");
+  });
+
+  it("keeps timing a task bound to a background agent", () => {
+    store.create("Task", "Desc", "Working", { agentId: "agent-123" });
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1");
+
+    widget.settle();
+    vi.advanceTimersByTime(120_000);
+    widget.update();
+
+    expect(renderWidget(ui.state)[1]).toContain("2m");
+  });
+});
+
+describe("timeDisplay: clock", () => {
+  let store: TaskStore;
+  let widget: TaskWidget;
+  let ui: ReturnType<typeof mockUICtx>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 4, 14, 5, 0));
+    store = new TaskStore();
+    widget = new TaskWidget(store, { timeDisplay: "clock" });
+    ui = mockUICtx();
+    widget.setUICtx(ui.ctx);
+  });
+
+  afterEach(() => {
+    widget.dispose();
+    vi.useRealTimers();
+  });
+
+  it("shows the start time of the active task instead of elapsed time", () => {
+    store.create("Task", "Desc", "Working");
+    store.update("1", { status: "in_progress" });
+    widget.setActiveTask("1");
+    vi.advanceTimersByTime(3_723_000);
+    widget.addTokenUsage(500, 200);
+    widget.update();
+
+    const line = renderWidget(ui.state)[1];
+    expect(line).toContain("(started 14:05 · ↑ 500 ↓ 200)");
+    expect(line).not.toContain("1h");
+  });
+
+  it("shows the last update time on other tasks", () => {
+    store.create("Open", "Desc");
+    store.create("Done", "Desc");
+    store.update("2", { status: "completed" });
+    vi.advanceTimersByTime(90 * 60_000);
+    store.create("Later", "Desc");
+    widget.update();
+
+    const lines = renderWidget(ui.state);
+    expect(lines[1]).toContain("#1 Open (14:05)");
+    expect(lines[2]).toContain("~~#2 Done~~ (14:05)");
+    expect(lines[3]).toContain("#3 Later (15:35)");
+  });
+
+  it("adds the date when the update was not today", () => {
+    store.create("Old", "Desc");
+    vi.setSystemTime(new Date(2026, 10, 5, 9, 0, 0));
+    widget.update();
+
+    expect(renderWidget(ui.state)[1]).toContain("#1 Old (11-04 14:05)");
+  });
+
+  it("leaves other tasks without a time by default", () => {
+    widget.dispose();
+    widget = new TaskWidget(store);
+    widget.setUICtx(ui.ctx);
+    store.create("Open", "Desc");
+    widget.update();
+
+    expect(renderWidget(ui.state)[1]).not.toMatch(/\(\d\d:\d\d\)/);
+  });
+});
+
 describe("configurable glyphs", () => {
   let store: TaskStore;
   let ui: ReturnType<typeof mockUICtx>;
