@@ -59,4 +59,15 @@ describe("widget spinner lifecycle", () => {
 
     expect(vi.getTimerCount()).toBe(1);
   });
+
+  it("stops the spinner when the run settles and restarts it on the next turn", async () => {
+    const { mock, ctx } = await startWithActiveTask();
+    expect(vi.getTimerCount()).toBe(1);
+
+    await mock.fireLifecycle("agent_settled", {}, ctx);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await mock.fireLifecycle("turn_start", {}, ctx);
+    expect(vi.getTimerCount()).toBe(1);
+  });
 });

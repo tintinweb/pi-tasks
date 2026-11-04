@@ -509,13 +509,16 @@ export default function (pi: ExtensionAPI) {
       if (isSessionScope()) deleteSessionFileIfEmpty();
       widget.update();
     }
+    widget.resume();
   });
 
   // The end of a run is the only signal that separates a new batch of tasks from the
   // same batch still being built — the store looks identical either way. Nothing is
-  // cleared here; this only marks the boundary for the next TaskCreate.
+  // cleared here; this only marks the boundary for the next TaskCreate. The widget
+  // also stops timing tasks nobody is running, so an idle session does not keep counting.
   pi.on("agent_settled", async () => {
     autoClear.onRunEnded();
+    widget.settle();
   });
 
   // ── Token usage tracking + stale-task detection ──

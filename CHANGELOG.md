@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`timeDisplay: "clock"` — wall-clock times in the widget.** The default (`elapsed`) is unchanged. With `clock`, the active task shows when it started (`started 14:05`) instead of a duration, and every other task shows the time it was last updated (`(14:05)`, or `(11-03 14:05)` when not today). Also in `/tasks` → Settings.
+
+### Fixed
+- **The widget's elapsed timer no longer keeps counting while the agent is idle.** A task left `in_progress` stayed "active" after the run ended, so its spinner and timer kept running for hours (`7h 46m`). The spinner and timer now stop when the run settles and restart from zero on the next turn; tasks bound to a background agent keep running until the agent reports.
+
 ## [0.9.1] - 2026-10-13
 
 ### Fixed
