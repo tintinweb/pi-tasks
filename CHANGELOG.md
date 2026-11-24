@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **Collapsible task widget.** In Pi 1.6+ fullscreen mode, left-click the header to toggle the task list. Each session starts expanded; regular mode is unchanged.
-
 ## [0.9.1] - 2026-10-13
 
 ### Fixed
