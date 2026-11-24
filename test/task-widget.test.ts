@@ -62,6 +62,42 @@ describe("TaskWidget", () => {
     vi.useRealTimers();
   });
 
+  it("toggles only on fullscreen left-clicks on the header and resets for a new session", () => {
+    store.create("Task", "Desc");
+    widget.update();
+    const requestRender = vi.fn();
+    const component = ui.state.widgets.get("tasks").content({ mode: "fullscreen", terminal: { columns: 80 }, requestRender }, mockTheme());
+
+    expect(component.render()).toHaveLength(2);
+    expect(component.render()[0]).toContain("▾");
+    for (const event of [
+      { type: "click", button: "left", y: 1 },
+      { type: "click", button: "right", y: 0 },
+      { type: "press", button: "left", y: 0 },
+    ]) expect(component.handleMouse(event)).toBeUndefined();
+    expect(requestRender).not.toHaveBeenCalled();
+    expect(component.handleMouse({ type: "click", button: "left", y: 0 })).toEqual({ handled: true });
+    expect(requestRender).toHaveBeenCalledTimes(1);
+    expect(component.render()).toHaveLength(1);
+    expect(component.render()[0]).toContain("▸");
+    component.handleMouse({ type: "click", button: "left", y: 0 });
+    expect(component.render()).toHaveLength(2);
+    component.handleMouse({ type: "click", button: "left", y: 0 });
+    widget.resetExpanded();
+    expect(component.render()).toHaveLength(2);
+  });
+
+  it("keeps regular mode unchanged", () => {
+    store.create("Task", "Desc");
+    widget.update();
+    const requestRender = vi.fn();
+    const component = ui.state.widgets.get("tasks").content({ mode: "regular", terminal: { columns: 80 }, requestRender }, mockTheme());
+    expect(component.handleMouse({ type: "click", button: "left", y: 0 })).toBeUndefined();
+    expect(component.render()).toHaveLength(2);
+    expect(component.render()[0]).not.toContain("▾");
+    expect(requestRender).not.toHaveBeenCalled();
+  });
+
   it("shows nothing when no tasks exist", () => {
     widget.update();
     const entry = ui.state.widgets.get("tasks");

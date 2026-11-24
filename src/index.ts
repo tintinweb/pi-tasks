@@ -609,6 +609,7 @@ export default function (pi: ExtensionAPI) {
     // copy. Snapshot before the store re-points to the new (empty) session file.
     const forkSeed = reason === "fork" ? store.snapshot() : undefined;
     if (isSwitch) {
+      widget.resetExpanded();
       persistedTasksShown = false;
       agentsReattached = false;
       // Task IDs restart at 1 in every session, so a mapping held over from the

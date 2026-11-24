@@ -42,6 +42,19 @@ async function startWithActiveTask() {
 }
 
 describe("widget spinner lifecycle", () => {
+  it.each(["new", "resume", "fork"])("starts expanded after %s", async (reason) => {
+    const { mock, ctx } = await startWithActiveTask();
+    const factory = ctx.ui.setWidget.mock.calls.find(call => call[0] === "tasks" && call[1])?.[1];
+    const theme = { fg: (_color: string, text: string) => text, strikethrough: (text: string) => text };
+    const component = factory({ mode: "fullscreen", terminal: { columns: 80 }, requestRender() {} }, theme);
+    component.handleMouse({ type: "click", button: "left", y: 0 });
+    expect(component.render()).toHaveLength(1);
+
+    await mock.fireLifecycle("session_start", { reason }, ctx);
+    expect(component.render().length).toBeGreaterThan(1);
+    await mock.fireLifecycle("session_shutdown", { reason: "quit" }, ctx);
+  });
+
   it("clears the spinner interval on session_shutdown", async () => {
     const { mock, ctx } = await startWithActiveTask();
     expect(vi.getTimerCount()).toBe(1);

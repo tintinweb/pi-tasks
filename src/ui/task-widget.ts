@@ -88,11 +88,16 @@ export class TaskWidget {
   private tui: any | undefined;
   /** Whether the widget callback is currently registered. */
   private widgetRegistered = false;
+  private expanded = true;
 
   constructor(
     private store: TaskStore,
     private config: TasksConfig = {},
   ) {}
+
+  resetExpanded() {
+    this.expanded = true;
+  }
 
   setStore(store: TaskStore) {
     this.store = store;
@@ -174,7 +179,9 @@ export class TaskWidget {
     const statusText = `${tasks.length} tasks (${parts.join(", ")})`;
 
     const spinnerFrame = glyphs.spinner[this.widgetFrame % glyphs.spinner.length];
-    const lines: string[] = [truncate(theme.fg("accent", glyphs.header) + " " + theme.fg("accent", statusText))];
+    const indicator = tui.mode === "fullscreen" ? `${this.expanded ? "▾" : "▸"} ` : "";
+    const lines: string[] = [truncate(theme.fg("accent", indicator + glyphs.header) + " " + theme.fg("accent", statusText))];
+    if (!this.expanded && tui.mode === "fullscreen") return lines;
 
     // Collapsing only decides what goes in the list; the visible-limit logic below
     // then runs unchanged over whatever remains.
@@ -302,7 +309,16 @@ export class TaskWidget {
     if (!this.widgetRegistered) {
       this.uiCtx.setWidget("tasks", (tui, theme) => {
         this.tui = tui;
-        return { render: () => this.renderWidget(tui, theme), invalidate: () => {} };
+        return {
+          render: () => this.renderWidget(tui, theme),
+          invalidate: () => {},
+          handleMouse: (event: { type: string; button: string; y: number }) => {
+            if (tui.mode !== "fullscreen" || event.type !== "click" || event.button !== "left" || event.y !== 0) return;
+            this.expanded = !this.expanded;
+            tui.requestRender();
+            return { handled: true };
+          },
+        };
       }, { placement: "aboveEditor" });
       this.widgetRegistered = true;
     } else if (this.tui) {
