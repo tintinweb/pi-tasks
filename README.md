@@ -53,6 +53,8 @@ The extension renders a persistent widget above the editor:
 | `◻` | Pending |
 | `✳`/`✽` | Animated star spinner — actively executing task (shows `activeForm` text, elapsed time, token counts) |
 
+In Pi 1.6 or later, left-click the widget header in fullscreen mode to collapse or expand the list. Each session starts expanded. Regular mode and older Pi versions remain unchanged.
+
 ### Widget display settings
 
 How tasks are sorted and how many are shown can be configured via `/tasks` → Settings (saved as project overrides in `.pi/tasks-config.json`), except `glyphs`, which is set in the config file directly. All defaults preserve the original behaviour.
